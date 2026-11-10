@@ -29,6 +29,8 @@ class JobBase(BaseModel):
     matched_skills: List[str] = Field(default_factory=list)
     missing_skills: List[str] = Field(default_factory=list)
     is_relevant: bool = False
+    is_expired: bool = False
+    liveness_status: Optional[str] = "active"
 
 class JobUpdateStatus(BaseModel):
     status: str
@@ -40,6 +42,14 @@ class BulkStatusRequest(BaseModel):
 
 class BulkDeleteRequest(BaseModel):
     job_ids: List[str]
+
+class JobImportRequest(BaseModel):
+    url: Optional[str] = None
+    raw_text: Optional[str] = None
+    title: Optional[str] = None
+    company: Optional[str] = None
+    location: Optional[str] = "India"
+    source: Optional[str] = "direct"
 
 class ScrapeRequest(BaseModel):
     keywords: Union[List[str], str] = Field(default_factory=lambda: ["Python Developer"])

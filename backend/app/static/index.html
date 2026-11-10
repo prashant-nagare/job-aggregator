@@ -65,6 +65,8 @@
       remoteok: { bg: 'bg-emerald-950/60', text: 'text-emerald-400', border: 'border-emerald-800/60', label: 'RemoteOK' },
       glassdoor: { bg: 'bg-amber-950/60', text: 'text-amber-400', border: 'border-amber-800/60', label: 'Glassdoor' },
       naukri: { bg: 'bg-rose-950/60', text: 'text-rose-400', border: 'border-rose-800/60', label: 'Naukri' },
+      direct: { bg: 'bg-teal-950/60', text: 'text-teal-300', border: 'border-teal-700/60', label: 'Direct / Ingested' },
+      custom: { bg: 'bg-cyan-950/60', text: 'text-cyan-300', border: 'border-cyan-700/60', label: 'Custom' },
     };
 
     const STATUS_CONFIG = {
@@ -104,6 +106,7 @@
       const [filterExpRange, setFilterExpRange] = useState('all');
       const [minAiScore, setMinAiScore] = useState('all'); // 'all', '60', '70', '80', '90'
       const [onlyRelevant, setOnlyRelevant] = useState(false);
+      const [hideExpired, setHideExpired] = useState(false);
 
       // Scraper Form State (Auto-Remembered)
       const [scrapeKeywords, setScrapeKeywords] = useState(["Python Developer"]);
@@ -172,6 +175,19 @@
       const [notesText, setNotesText] = useState('');
       const [detailLoading, setDetailLoading] = useState(false);
       const [evaluatingSingle, setEvaluatingSingle] = useState(false);
+      const [checkingLiveness, setCheckingLiveness] = useState(false);
+
+      // External Job Ingestion Modal State (+ Add Job)
+      const [showAddJobModal, setShowAddJobModal] = useState(false);
+      const [addJobTab, setAddJobTab] = useState('url'); // 'url' | 'text'
+      const [addJobUrl, setAddJobUrl] = useState('');
+      const [addJobTitle, setAddJobTitle] = useState('');
+      const [addJobCompany, setAddJobCompany] = useState('');
+      const [addJobLocation, setAddJobLocation] = useState('India');
+      const [addJobText, setAddJobText] = useState('');
+      const [addingJob, setAddingJob] = useState(false);
+      const [addJobError, setAddJobError] = useState(null);
+      const [addJobSuccess, setAddJobSuccess] = useState(null);
 
       useEffect(() => {
         fetchJobs();
@@ -839,6 +855,85 @@
         }
       };
 
+      const handleAddJobSubmit = async (e) => {
+        e?.preventDefault();
+        setAddJobError(null);
+        setAddJobSuccess(null);
+
+        if (addJobTab === 'url') {
+          if (!addJobUrl.trim()) {
+            setAddJobError('Please enter a job URL.');
+            return;
+          }
+        } else {
+          if (!addJobText.trim()) {
+            setAddJobError('Please paste the job description or message.');
+            return;
+          }
+        }
+
+        setAddingJob(true);
+        try {
+          const payload = {
+            url: addJobTab === 'url' ? addJobUrl.trim() : null,
+            raw_text: addJobTab === 'text' ? addJobText.trim() : null,
+            title: addJobTitle.trim() || null,
+            company: addJobCompany.trim() || null,
+            location: addJobLocation.trim() || 'India',
+            source: 'direct'
+          };
+
+          const res = await fetch('/api/jobs/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (res.ok && data.job) {
+            setAddJobSuccess(`Job imported successfully! AI Match: ${data.job.ai_score !== null ? data.job.ai_score + '%' : 'Calculated'}`);
+            setJobs(prev => [data.job, ...prev.filter(j => j.id !== data.job.id)]);
+            fetchStats();
+            setAddJobUrl('');
+            setAddJobTitle('');
+            setAddJobCompany('');
+            setAddJobText('');
+            loadJobDetails(data.job);
+          } else {
+            setAddJobError(data.detail || 'Failed to import job listing.');
+          }
+        } catch (err) {
+          console.error('Error importing job:', err);
+          setAddJobError('Network error while importing job. Please try again.');
+        } finally {
+          setAddingJob(false);
+        }
+      };
+
+      const handleCheckLiveness = async (jobId) => {
+        setCheckingLiveness(true);
+        try {
+          const res = await fetch(`/api/jobs/${jobId}/check-liveness`, {
+            method: 'POST'
+          });
+          const data = await res.json();
+          if (res.ok && data.liveness) {
+            const isExp = Boolean(data.liveness.is_expired);
+            const livenessSt = data.liveness.status || 'unknown';
+            setJobs(prev => prev.map(j => j.id === jobId ? { ...j, is_expired: isExp, liveness_status: livenessSt } : j));
+            if (activeJob && activeJob.id === jobId) {
+              setActiveJob(prev => ({ ...prev, is_expired: isExp, liveness_status: livenessSt }));
+            }
+          } else {
+            alert(data.detail || 'Unable to verify link liveness.');
+          }
+        } catch (err) {
+          console.error('Error checking liveness:', err);
+          alert('Network error checking link liveness.');
+        } finally {
+          setCheckingLiveness(false);
+        }
+      };
+
       // Filtered Jobs in frontend
       const filteredJobs = useMemo(() => {
         const nowSec = Math.floor(Date.now() / 1000);
@@ -862,6 +957,7 @@
           }
 
           if (onlyRelevant && !job.is_relevant) return false;
+          if (hideExpired && job.is_expired) return false;
 
           // Date Posted Filter
           if (filterDateRange !== 'any' && dateCutoffs[filterDateRange]) {
@@ -899,7 +995,7 @@
 
           return true;
         });
-      }, [jobs, selectedStatus, selectedPortal, remoteOnly, filterDateRange, filterExpRange, minAiScore, onlyRelevant, searchQuery]);
+      }, [jobs, selectedStatus, selectedPortal, remoteOnly, filterDateRange, filterExpRange, minAiScore, onlyRelevant, hideExpired, searchQuery]);
 
       const toggleSource = (src) => {
         setScrapeSources(prev => 
@@ -931,6 +1027,17 @@
 
               {/* Action Buttons: Resume, AI Config, Auto-Scrape, Scraper */}
               <div className="flex items-center gap-2">
+                {/* + Add Job (URL or Raw Text / WhatsApp) */}
+                <button
+                  type="button"
+                  onClick={() => { setShowAddJobModal(true); setAddJobError(null); setAddJobSuccess(null); }}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition flex items-center gap-1.5 shadow-sm shadow-emerald-600/30 active:scale-95"
+                  title="Import external job by URL or raw text (WhatsApp, Telegram, direct ATS)"
+                >
+                  <span>➕</span>
+                  <span>Add Job</span>
+                </button>
+
                 {/* Resume Upload / Status Button */}
                 <button
                   type="button"
@@ -1437,6 +1544,7 @@
                   className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
                 >
                   <option value="all">All Portals</option>
+                  <option value="direct">Direct / Ingested</option>
                   <option value="linkedin">LinkedIn</option>
                   <option value="instahyre">Instahyre</option>
                   <option value="indeed">Indeed</option>
@@ -1444,6 +1552,20 @@
                   <option value="glassdoor">Glassdoor</option>
                   <option value="naukri">Naukri</option>
                 </select>
+
+                {/* Hide Expired / Ghost Jobs */}
+                <button
+                  onClick={() => setHideExpired(!hideExpired)}
+                  className={`px-3 py-2 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 ${
+                    hideExpired 
+                      ? 'bg-amber-950/60 border-amber-600 text-amber-300 ring-1 ring-amber-500'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                  title="Hide ghost jobs that have expired or closed"
+                >
+                  <span>👻</span>
+                  <span>{hideExpired ? 'Hiding Expired' : 'Filter Ghosts'}</span>
+                </button>
 
                 {/* Remote Only */}
                 <button
@@ -2453,6 +2575,179 @@
             </div>
           )}
 
+          {/* External Job Ingestion Modal */}
+          {showAddJobModal && (
+            <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+              <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl flex flex-col animate-in fade-in zoom-in-95 duration-150">
+                {/* Header */}
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-xl">➕</span>
+                    <div>
+                      <h3 className="text-base font-bold text-white">Add External Job Listing</h3>
+                      <p className="text-xs text-slate-400">Ingest job from URL or paste WhatsApp/Telegram message</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowAddJobModal(false)}
+                    className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 text-lg"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Tab Switcher */}
+                <div className="flex border-b border-slate-800 mt-4">
+                  <button
+                    type="button"
+                    onClick={() => { setAddJobTab('url'); setAddJobError(null); }}
+                    className={`pb-2.5 px-4 text-xs font-bold border-b-2 transition flex items-center gap-2 ${
+                      addJobTab === 'url'
+                        ? 'border-emerald-500 text-emerald-400'
+                        : 'border-transparent text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <span>🔗</span>
+                    <span>Paste Job URL</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setAddJobTab('text'); setAddJobError(null); }}
+                    className={`pb-2.5 px-4 text-xs font-bold border-b-2 transition flex items-center gap-2 ${
+                      addJobTab === 'text'
+                        ? 'border-emerald-500 text-emerald-400'
+                        : 'border-transparent text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <span>📝</span>
+                    <span>Paste Text / WhatsApp Message</span>
+                  </button>
+                </div>
+
+                {/* Alert Messages */}
+                {addJobError && (
+                  <div className="mt-4 p-3 rounded-xl bg-red-950/60 border border-red-800 text-red-300 text-xs flex items-center gap-2">
+                    <span>⚠️</span>
+                    <span>{addJobError}</span>
+                  </div>
+                )}
+                {addJobSuccess && (
+                  <div className="mt-4 p-3 rounded-xl bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs flex items-center gap-2">
+                    <span>✓</span>
+                    <span>{addJobSuccess}</span>
+                  </div>
+                )}
+
+                {/* Form */}
+                <form onSubmit={handleAddJobSubmit} className="mt-4 space-y-4">
+                  {addJobTab === 'url' ? (
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                        Job Posting URL *
+                      </label>
+                      <input
+                        type="url"
+                        value={addJobUrl}
+                        onChange={(e) => setAddJobUrl(e.target.value)}
+                        placeholder="https://www.linkedin.com/jobs/view/... or Naukri / Instahyre URL"
+                        required
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                      />
+                      <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                        Supports LinkedIn, Naukri, Instahyre, Indeed, Lever, Greenhouse, Workday, and company career pages. JobScout automatically scrapes the role description, checks link liveness, and matches it with your profile.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+                            Role Title (Optional)
+                          </label>
+                          <input
+                            type="text"
+                            value={addJobTitle}
+                            onChange={(e) => setAddJobTitle(e.target.value)}
+                            placeholder="e.g. Vulnerability Management Analyst"
+                            className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+                            Company (Optional)
+                          </label>
+                          <input
+                            type="text"
+                            value={addJobCompany}
+                            onChange={(e) => setAddJobCompany(e.target.value)}
+                            placeholder="e.g. TCS / Infosys / Startup"
+                            className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+                            Location
+                          </label>
+                          <input
+                            type="text"
+                            value={addJobLocation}
+                            onChange={(e) => setAddJobLocation(e.target.value)}
+                            placeholder="e.g. Pune, India / Hybrid / Remote"
+                            className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+                          Job Description or Message *
+                        </label>
+                        <textarea
+                          value={addJobText}
+                          onChange={(e) => setAddJobText(e.target.value)}
+                          placeholder="Paste WhatsApp/Telegram job message, referral email, or complete JD text here..."
+                          rows="6"
+                          required
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 leading-relaxed font-mono"
+                        ></textarea>
+                      </div>
+                    </>
+                  )}
+
+                  <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddJobModal(false)}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl"
+                    >
+                      Close
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={addingJob}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-semibold text-xs rounded-xl shadow-md shadow-emerald-600/30 flex items-center gap-1.5 transition active:scale-95"
+                    >
+                      {addingJob ? (
+                        <>
+                          <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                          <span>Extracting & Scoring...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>⚡</span>
+                          <span>{addJobTab === 'url' ? 'Fetch & Score Job' : 'Ingest & Score Job'}</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
           {/* Job Inspection / Full Details Drawer */}
           {activeJob && (
             <div className="fixed inset-0 z-50 overflow-hidden flex justify-end bg-black/60 backdrop-blur-sm transition-opacity">
@@ -2465,6 +2760,15 @@
                     } ${PORTAL_COLORS[activeJob.source]?.text || 'text-slate-300'} ${PORTAL_COLORS[activeJob.source]?.border || 'border-slate-700'}`}>
                       {PORTAL_COLORS[activeJob.source]?.label || activeJob.source}
                     </span>
+                    {activeJob.is_expired ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-950/80 text-red-300 border border-red-700/80">
+                        ⚠️ Expired / Closed
+                      </span>
+                    ) : activeJob.liveness_status === 'active' ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950/60 text-emerald-400 border border-emerald-800/60">
+                        ✓ Verified Live
+                      </span>
+                    ) : null}
                     {activeJob.has_full_description && (
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950/60 text-emerald-400 border border-emerald-800/60">
                         ⚡ Full Description Scraped
@@ -2479,6 +2783,50 @@
                 <div className="mt-4 flex-1">
                   <h2 className="text-xl font-bold text-white leading-tight mb-1">{activeJob.title}</h2>
                   <p className="text-sm font-semibold text-indigo-400 mb-3">{activeJob.company}</p>
+
+                  {/* Priority Recommendation / Fit Verdict */}
+                  {activeJob.is_expired ? (
+                    <div className="mb-4 p-3 rounded-xl bg-red-950/50 border border-red-800/80 flex items-start gap-2.5">
+                      <span className="text-lg">⚠️</span>
+                      <div>
+                        <span className="text-xs font-bold text-red-300 block">Expired or Inactive Posting (Ghost Job)</span>
+                        <p className="text-[11px] text-red-400/90 leading-relaxed">
+                          The portal indicates this position is closed, removed (404), or no longer accepting applications.
+                        </p>
+                      </div>
+                    </div>
+                  ) : activeJob.ai_score !== null && activeJob.ai_score !== undefined ? (
+                    <div className={`mb-4 p-3 rounded-xl border flex items-start gap-2.5 ${
+                      activeJob.ai_score >= 70
+                        ? 'bg-emerald-950/40 border-emerald-800/70'
+                        : activeJob.ai_score >= 50
+                        ? 'bg-amber-950/40 border-amber-800/70'
+                        : 'bg-slate-900 border-slate-800'
+                    }`}>
+                      <span className="text-lg">
+                        {activeJob.ai_score >= 70 ? '🟢' : activeJob.ai_score >= 50 ? '🟡' : '🔴'}
+                      </span>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-bold ${
+                            activeJob.ai_score >= 70 ? 'text-emerald-300' : activeJob.ai_score >= 50 ? 'text-amber-300' : 'text-slate-300'
+                          }`}>
+                            {activeJob.ai_score >= 70 ? 'High Priority Apply (Recommended)' : activeJob.ai_score >= 50 ? 'Stretch / Consider Fit' : 'Skip / Low Profile Match'}
+                          </span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded font-extrabold bg-slate-950/60 text-slate-300 border border-slate-800">
+                            {activeJob.ai_score}%
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 leading-relaxed mt-0.5">
+                          {activeJob.ai_score >= 70
+                            ? 'Top candidate fit! Strong overlap with your target tech stack and experience.'
+                            : activeJob.ai_score >= 50
+                            ? 'Partial skill overlap. Consider applying if you have complementary experience.'
+                            : 'Fewer overlapping skills detected compared to your current profile.'}
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
 
                   {/* AI Match Breakdown Card */}
                   <div className="p-4 rounded-xl bg-gradient-to-br from-indigo-950/50 to-slate-900 border border-indigo-900/60 mb-5">
@@ -2576,15 +2924,31 @@
                     </span>
                   </div>
 
-                  {/* Quick Action Button */}
-                  <div className="flex gap-2 mb-6">
+                  {/* Quick Action Button & Ghost Job Liveness Checker */}
+                  <div className="flex flex-col sm:flex-row gap-2 mb-6">
                     <button
                       onClick={() => handleQuickApply(activeJob)}
-                      className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-1.5 transition"
+                      className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-1.5 transition active:scale-95"
                     >
                       <span>🚀 Apply on {PORTAL_COLORS[activeJob.source]?.label || 'Portal'}</span>
                       <span>↗</span>
                     </button>
+                    {activeJob.apply_url && activeJob.apply_url !== '#' && (
+                      <button
+                        type="button"
+                        onClick={() => handleCheckLiveness(activeJob.id)}
+                        disabled={checkingLiveness}
+                        className={`px-3 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 border ${
+                          activeJob.is_expired
+                            ? 'bg-red-950/60 border-red-800 text-red-300 hover:bg-red-950'
+                            : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
+                        }`}
+                        title="Check if this job listing URL is still live or expired (Ghost Job check)"
+                      >
+                        <span>{checkingLiveness ? '⏳' : activeJob.is_expired ? '⚠️' : '🔍'}</span>
+                        <span>{checkingLiveness ? 'Checking...' : activeJob.is_expired ? 'Expired (Re-check)' : 'Check Liveness'}</span>
+                      </button>
+                    )}
                   </div>
 
                   {/* Status Selector */}
@@ -2708,6 +3072,8 @@
         <div className={`bg-slate-900/90 border ${
           isSelected 
             ? 'border-indigo-500 ring-2 ring-indigo-500/40 shadow-indigo-500/10' 
+            : job.is_expired
+            ? 'border-red-900/40 opacity-85 hover:border-red-700'
             : 'border-slate-800/80 hover:border-slate-700'
         } rounded-2xl p-5 flex flex-col justify-between transition-all duration-200 hover:shadow-xl hover:shadow-indigo-500/5 group relative`}>
           <div>
@@ -2726,19 +3092,23 @@
                 </span>
               </div>
 
-              <div className="flex items-center gap-1.5">
-                {/* AI Match Badge */}
-                {job.ai_score !== null && job.ai_score !== undefined && (
-                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold border ${
-                    job.ai_score >= 80 
-                      ? 'bg-emerald-950/70 text-emerald-300 border-emerald-600'
-                      : job.ai_score >= 60
-                      ? 'bg-amber-950/70 text-amber-300 border-amber-600'
-                      : 'bg-slate-800 text-slate-400 border-slate-700'
-                  }`}>
-                    🎯 {job.ai_score}%
+              <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                {/* Expired / Ghost Job or Priority Recommendation Badge */}
+                {job.is_expired ? (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold border bg-red-950/80 text-red-300 border-red-700/80" title="Listing appears expired or closed (ghost job)">
+                    ⚠️ Expired
                   </span>
-                )}
+                ) : job.ai_score !== null && job.ai_score !== undefined ? (
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${
+                    job.ai_score >= 70 
+                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-600'
+                      : job.ai_score >= 50
+                      ? 'bg-amber-950/80 text-amber-300 border-amber-600'
+                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                  }`} title={job.ai_score >= 70 ? 'High Priority Apply (Top Fit)' : job.ai_score >= 50 ? 'Stretch / Consider Fit' : 'Low Profile Fit'}>
+                    {job.ai_score >= 70 ? '🟢 Priority ' : job.ai_score >= 50 ? '🟡 Stretch ' : '🔴 Low '}{job.ai_score}%
+                  </span>
+                ) : null}
 
                 {/* Status Badge */}
                 <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border ${statusConf.color}`}>
@@ -2879,13 +3249,17 @@
                         <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">
                           {j.source}
                         </span>
-                        {j.ai_score !== null && j.ai_score !== undefined && (
-                          <span className={`text-[10px] font-extrabold px-1.5 py-0.2 rounded ${
-                            j.ai_score >= 80 ? 'text-emerald-300 bg-emerald-950/80' : 'text-amber-300 bg-amber-950/80'
-                          }`}>
-                            🎯 {j.ai_score}%
+                        {j.is_expired ? (
+                          <span className="text-[10px] font-bold text-red-400 bg-red-950/80 px-1.5 py-0.5 rounded border border-red-800/80">
+                            ⚠️ Expired
                           </span>
-                        )}
+                        ) : j.ai_score !== null && j.ai_score !== undefined ? (
+                          <span className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded ${
+                            j.ai_score >= 70 ? 'text-emerald-300 bg-emerald-950/80' : j.ai_score >= 50 ? 'text-amber-300 bg-amber-950/80' : 'text-slate-400 bg-slate-800'
+                          }`}>
+                            {j.ai_score >= 70 ? '🟢 ' : j.ai_score >= 50 ? '🟡 ' : '🔴 '}{j.ai_score}%
+                          </span>
+                        ) : null}
                       </div>
                       <h5 className="text-xs font-bold text-white group-hover:text-indigo-300 line-clamp-1 mb-0.5">
                         {j.title}

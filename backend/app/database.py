@@ -54,7 +54,9 @@ def init_db():
         ("ai_summary", "TEXT"),
         ("matched_skills", "TEXT"),
         ("missing_skills", "TEXT"),
-        ("is_relevant", "INTEGER DEFAULT 0")
+        ("is_relevant", "INTEGER DEFAULT 0"),
+        ("is_expired", "INTEGER DEFAULT 0"),
+        ("liveness_status", "TEXT DEFAULT 'active'")
     ]
     for col_name, col_type in new_cols:
         if col_name not in columns:
@@ -265,6 +267,8 @@ def get_job_by_id(job_id: str) -> Optional[Dict[str, Any]]:
     d['is_remote'] = bool(d['is_remote'])
     d['has_full_description'] = bool(d.get('has_full_description', 0))
     d['is_relevant'] = bool(d.get('is_relevant', 0))
+    d['is_expired'] = bool(d.get('is_expired', 0))
+    d['liveness_status'] = d.get('liveness_status') or 'active'
     for key in ['skills', 'matched_skills', 'missing_skills']:
         try:
             d[key] = json.loads(d[key]) if d.get(key) else []
@@ -364,6 +368,8 @@ def get_jobs(
         d['is_remote'] = bool(d['is_remote'])
         d['has_full_description'] = bool(d.get('has_full_description', 0))
         d['is_relevant'] = bool(d.get('is_relevant', 0))
+        d['is_expired'] = bool(d.get('is_expired', 0))
+        d['liveness_status'] = d.get('liveness_status') or 'active'
         for key in ['skills', 'matched_skills', 'missing_skills']:
             try:
                 d[key] = json.loads(d[key]) if d.get(key) else []
@@ -421,6 +427,20 @@ def bulk_delete_jobs(job_ids: List[str]) -> int:
     placeholders = ",".join("?" for _ in job_ids)
     cursor.execute(f"DELETE FROM jobs WHERE id IN ({placeholders})", job_ids)
     affected = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return affected
+
+def update_job_liveness(job_id: str, is_expired: bool, liveness_status: str) -> bool:
+    """
+    Updates the liveness and expiration state of a job listing.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE jobs SET is_expired = ?, liveness_status = ? WHERE id = ?
+    """, (1 if is_expired else 0, liveness_status, job_id))
+    affected = cursor.rowcount > 0
     conn.commit()
     conn.close()
     return affected

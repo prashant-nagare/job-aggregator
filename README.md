@@ -94,6 +94,22 @@ Applying for jobs across multiple portals (**LinkedIn**, **Instahyre**, **Indeed
 * **CSV Export**: One-click export to download all tracked listings.
 * **Persistent Preferences**: Remembers all your keywords, locations, cookies, and filters across browser sessions.
 
+### 7. External Job Ingestion & Ghost Job Liveness Checker (Adapted for India)
+* **➕ Direct Job Ingestion (`+ Add Job`)**:
+  * **Paste Job URL**: Directly paste job links from LinkedIn, Naukri, Instahyre, Indeed, Lever, Greenhouse, Workday, or company ATS portals. JobScout automatically scrapes the role description, checks link liveness, and matches it against your profile in seconds.
+  * **Paste Raw Text / WhatsApp Message**: Tailored for the Indian market where top tech and cybersecurity opportunities are frequently circulated in WhatsApp/Telegram groups or direct recruiter emails. Paste any raw message, specify optional title/company, and JobScout ingests and scores it instantly.
+* **🔍 Ghost Job Liveness Checker**:
+  * Indian portals frequently leave dead listings online as "ghost jobs" to inflate active listing counts.
+  * JobScout checks HTTP status (404/410) and scans for portal closing markers (*"no longer accepting applications"*, *"job has expired"*, *"this vacancy is closed"*).
+  * 1-click **`[🔍 Check Liveness]`** in the job inspection drawer, with immediate badge updates (`⚠️ Expired` vs `✓ Verified Live`).
+* **🎯 Priority Recommendation Badges**:
+  * Instant fit verdict displayed on every card and inspection drawer:
+    * `🟢 High Priority Apply` (≥ 70% match): Top technical alignment with core skills.
+    * `🟡 Stretch / Consider` (50–69% match): Partial overlap; suitable for stretch applications.
+    * `🔴 Skip / Low Fit` (< 50% match): Low profile alignment.
+    * `⚠️ Expired / Closed`: Dead or inactive listing.
+  * **`👻 Filter Ghosts` Toggle**: 1-click toolbar button to hide all expired and closed listings from your feed.
+
 ---
 
 ## 🏗 Architecture & How It Works
@@ -228,8 +244,16 @@ JobScout Pro provides a full REST API for programmatic access:
 | `GET` | `/api/stats` | Summary statistics (total jobs, by status, by source) |
 | `GET` | `/api/jobs` | Query listings with filters (`q`, `status`, `source`, `locations`, `open_to_all_india`, `date_range`, `exp_range`, `limit`, `offset`) |
 | `GET` | `/api/jobs/{id}/details` | On-demand detail scraper: extracts and caches complete job description |
-| `PATCH` | `/api/jobs/{id}/status` | Update job status (`new`, `saved`, `applied`, `interviewing`, `offer`, `rejected`) and custom notes |
-| `DELETE` | `/api/jobs/{id}` | Remove a listing |
+| `PATCH` | `/api/jobs/{id}/status` | Update job status (`new`, `saved`, `applied`, `interviewing`, `offer`, `rejected`, `not_relevant`) and custom notes |
+| `POST` | `/api/jobs/bulk-status` | Bulk update status for multiple jobs in a single request |
+| `DELETE` | `/api/jobs/{id}` | Remove a single listing |
+| `POST` | `/api/jobs/bulk-delete` | Bulk delete multiple job listings in one action |
+| `POST` | `/api/jobs/import` | Ingest external job from URL (LinkedIn, Naukri, ATS) or raw text (WhatsApp/Telegram) and calculate match score |
+| `POST` | `/api/jobs/{id}/check-liveness` | Verify if job URL is active or expired/closed (Ghost Job checker) |
+| `POST` | `/api/resume/manual` | Save structured manual profile and match criteria (100% private) |
+| `POST` | `/api/resume/upload` | Upload resume PDF with selectable AI (`gemini`/`openai`) or offline local heuristic parsing |
+| `POST` | `/api/jobs/{id}/evaluate` | Re-score an individual job against candidate profile |
+| `POST` | `/api/jobs/evaluate-all` | Re-score entire database against profile |
 | `POST` | `/api/scrape` | Trigger an on-demand multi-portal scrape and update configuration |
 | `GET` | `/api/config` | Retrieve saved user scraper inputs |
 | `POST` | `/api/config` | Save user scraper inputs |

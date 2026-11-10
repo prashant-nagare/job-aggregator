@@ -1,7 +1,7 @@
 import re
 import time
 from datetime import datetime, timedelta
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 import requests
 from bs4 import BeautifulSoup
 
@@ -153,3 +153,173 @@ def fetch_job_detail(source: str, apply_url: str, raw_job_id: str = "") -> Optio
                 print(f"Error fetching Instahyre detail: {e}")
 
     return None
+
+def check_url_liveness(url: str) -> Dict[str, Any]:
+    """
+    Checks if a job listing URL is still active or expired/closed.
+    Returns:
+      is_live: bool
+      is_expired: bool
+      status: "active" | "expired" | "closed" | "unknown"
+      reason: str
+    """
+    if not url or not url.startswith("http"):
+        return {"is_live": True, "is_expired": False, "status": "unknown", "reason": "No valid URL to verify"}
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    }
+
+    try:
+        if cffi_requests:
+            session = cffi_requests.Session(impersonate="chrome120")
+            res = session.get(url, headers=headers, timeout=12)
+        else:
+            res = requests.get(url, headers=headers, timeout=12)
+
+        if res.status_code in [404, 410]:
+            return {
+                "is_live": False,
+                "is_expired": True,
+                "status": "expired",
+                "reason": f"Page returned HTTP {res.status_code} (Removed)"
+            }
+
+        # Check page text for common closure / expiry signals
+        text = res.text.lower()
+        closed_signals = [
+            "no longer accepting applications",
+            "this job is closed",
+            "job has expired",
+            "this vacancy is no longer available",
+            "position has been filled",
+            "the job you are looking for is no longer active",
+            "this posting has been removed",
+            "job is not available",
+            "this role is closed",
+            "this job has expired",
+            "posting is no longer active"
+        ]
+
+        for signal in closed_signals:
+            if signal in text:
+                return {
+                    "is_live": False,
+                    "is_expired": True,
+                    "status": "closed",
+                    "reason": f"Posting closed: '{signal.title()}'"
+                }
+
+        return {
+            "is_live": True,
+            "is_expired": False,
+            "status": "active",
+            "reason": "Posting is live and active"
+        }
+    except Exception as e:
+        return {
+            "is_live": True,
+            "is_expired": False,
+            "status": "unknown",
+            "reason": f"Could not verify (Network/Anti-bot check): {e}"
+        }
+
+def parse_external_job_url(url: str) -> Dict[str, Any]:
+    """
+    Extracts structured job information from any URL (LinkedIn, Naukri, or direct company page).
+    """
+    if not url or not url.startswith("http"):
+        raise ValueError("Invalid URL provided")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    }
+
+    try:
+        if cffi_requests:
+            session = cffi_requests.Session(impersonate="chrome120")
+            res = session.get(url, headers=headers, timeout=15)
+        else:
+            res = requests.get(url, headers=headers, timeout=15)
+
+        soup = BeautifulSoup(res.text, "html.parser")
+
+        # 1. Title extraction
+        title = ""
+        og_title = soup.find("meta", property="og:title")
+        if og_title and og_title.get("content"):
+            title = og_title["content"].strip()
+        elif soup.title and soup.title.string:
+            title = soup.title.string.strip()
+        elif soup.find("h1"):
+            title = soup.find("h1").get_text(strip=True)
+
+        # Clean title
+        title = re.sub(r'\s*\|\s*(LinkedIn|Naukri|Indeed|Glassdoor).*$', '', title, flags=re.IGNORECASE)
+        title = re.sub(r'\s*-\s*(LinkedIn|Naukri|Indeed|Glassdoor).*$', '', title, flags=re.IGNORECASE)
+
+        # 2. Company extraction
+        company = "Direct Employer"
+        og_site = soup.find("meta", property="og:site_name")
+        if og_site and og_site.get("content") and og_site["content"].lower() not in ["linkedin", "naukri", "indeed"]:
+            company = og_site["content"].strip()
+        
+        m_at = re.search(r'(?:at|@)\s+([A-Za-z0-9\s&.,\-_]+)', title)
+        if m_at:
+            potential_company = m_at.group(1).strip()
+            if len(potential_company) > 1 and len(potential_company) < 40:
+                company = potential_company
+
+        # 3. Location extraction
+        location = "India"
+        if "remote" in res.text.lower():
+            location = "Remote / India"
+        for city in ["Pune", "Bengaluru", "Bangalore", "Hyderabad", "Mumbai", "Delhi", "Gurgaon", "Gurugram", "Noida", "Chennai"]:
+            if city.lower() in res.text.lower():
+                location = city
+                break
+
+        # 4. Description extraction
+        desc_el = (
+            soup.find("div", class_=re.compile(r'description|jobDescription|job-description|details', re.I)) or
+            soup.find("section", class_=re.compile(r'description|jobDescription', re.I)) or
+            soup.find("article") or
+            soup.find("main")
+        )
+        if desc_el:
+            description = desc_el.get_text(separator="\n", strip=True)
+        else:
+            for tag in soup(["script", "style", "nav", "footer", "header"]):
+                tag.decompose()
+            description = soup.get_text(separator="\n", strip=True)
+
+        if len(description) > 6000:
+            description = description[:6000]
+
+        exp_min, exp_max = parse_experience(f"{title} {description[:1000]}")
+
+        source = "direct"
+        if "linkedin.com" in url:
+            source = "linkedin"
+        elif "naukri.com" in url:
+            source = "naukri"
+        elif "instahyre.com" in url:
+            source = "instahyre"
+        elif "indeed.com" in url:
+            source = "indeed"
+
+        return {
+            "title": title[:100] if title else "Job Opening",
+            "company": company[:60],
+            "location": location,
+            "description": description,
+            "apply_url": url,
+            "source": source,
+            "exp_min": exp_min,
+            "exp_max": exp_max,
+            "is_remote": "remote" in location.lower() or "remote" in title.lower()
+        }
+    except Exception as e:
+        raise ValueError(f"Could not fetch or parse job from URL: {e}")

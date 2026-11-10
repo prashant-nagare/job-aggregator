@@ -6,17 +6,18 @@ from typing import Optional, List, Dict, Any
 import io
 import csv
 import os
+import time
 import asyncio
 from datetime import datetime
 
-from app.models import JobBase, JobUpdateStatus, BulkStatusRequest, BulkDeleteRequest, ScrapeRequest, SchedulerConfig, AIConfig
+from app.models import JobBase, JobUpdateStatus, BulkStatusRequest, BulkDeleteRequest, JobImportRequest, ScrapeRequest, SchedulerConfig, AIConfig
 from app.database import (
     init_db, get_jobs, get_job_by_id, upsert_job, 
     update_job_status, bulk_update_status, update_job_description, update_job_ai_analysis,
-    delete_job, bulk_delete_jobs, get_stats, get_setting, set_setting
+    update_job_liveness, delete_job, bulk_delete_jobs, get_stats, get_setting, set_setting
 )
 from app.scrapers.aggregator import run_scraping_pipeline
-from app.scrapers.utils import fetch_job_detail, parse_experience
+from app.scrapers.utils import fetch_job_detail, parse_experience, check_url_liveness, parse_external_job_url
 from app.scheduler import scheduler
 from app.ai_matcher import (
     extract_text_from_pdf, parse_resume_profile, 
@@ -474,6 +475,127 @@ def remove_job(job_id: str):
 def remove_jobs_bulk(body: BulkDeleteRequest):
     deleted = bulk_delete_jobs(body.job_ids)
     return {"status": "success", "deleted_count": deleted}
+
+@app.post("/api/jobs/import")
+def import_external_job(payload: JobImportRequest):
+    """
+    Imports an external job from a URL (LinkedIn, Naukri, direct company ATS) or raw text.
+    Automatically evaluates fit against the candidate's active profile.
+    """
+    url = (payload.url or "").strip()
+    raw_text = (payload.raw_text or "").strip()
+
+    if not url and not raw_text:
+        raise HTTPException(status_code=400, detail="Please provide either a Job URL or paste the job description text.")
+
+    import hashlib
+    now_iso = datetime.utcnow().isoformat()
+    now_epoch = int(time.time())
+
+    if url and not raw_text:
+        try:
+            parsed = parse_external_job_url(url)
+            title = payload.title.strip() if payload.title else parsed["title"]
+            company = payload.company.strip() if payload.company else parsed["company"]
+            location = payload.location.strip() if payload.location and payload.location != "India" else parsed["location"]
+            description = parsed["description"]
+            source = parsed["source"]
+            exp_min = parsed["exp_min"]
+            exp_max = parsed["exp_max"]
+            is_remote = parsed["is_remote"]
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to fetch or parse job from URL: {e}")
+    else:
+        title = (payload.title or "Direct Job Opening").strip()
+        company = (payload.company or "Direct Hiring").strip()
+        location = (payload.location or "India").strip()
+        description = raw_text
+        source = (payload.source or "manual").strip()
+        exp_min, exp_max = parse_experience(f"{title} {description[:1000]}")
+        is_remote = "remote" in location.lower() or "remote" in title.lower()
+
+    job_id = hashlib.md5(f"{company}:{title}:{url or description[:50]}".encode()).hexdigest()
+
+    # Calculate match score against active profile
+    ai_score = None
+    ai_summary = None
+    matched_skills = []
+    missing_skills = []
+    is_relevant = False
+
+    resume_data = get_setting("resume_data")
+    if resume_data and resume_data.get("profile"):
+        ai_cfg = get_setting("ai_config", {"provider": "gemini", "api_key": ""})
+        temp_job = {
+            "id": job_id,
+            "title": title,
+            "company": company,
+            "location": location,
+            "description": description,
+            "is_remote": is_remote,
+            "skills": []
+        }
+        res = evaluate_job_match(
+            resume_profile=resume_data.get("profile", {}),
+            resume_text=resume_data.get("text", ""),
+            job=temp_job,
+            provider=ai_cfg.get("provider", "gemini"),
+            api_key=ai_cfg.get("api_key", ""),
+            model=ai_cfg.get("model", ""),
+            eval_method=resume_data.get("parse_method", "ai")
+        )
+        ai_score = res["match_score"]
+        ai_summary = res["ai_summary"]
+        matched_skills = res["matched_skills"]
+        missing_skills = res["missing_skills"]
+        is_relevant = res["is_relevant"]
+
+    job_record = {
+        "id": job_id,
+        "title": title,
+        "company": company,
+        "location": location,
+        "is_remote": is_remote,
+        "salary": None,
+        "experience": f"{exp_min}-{exp_max} yrs" if (exp_min and exp_max) else (f"{exp_min}+ yrs" if exp_min else None),
+        "exp_min": exp_min,
+        "exp_max": exp_max,
+        "job_type": "Full-time",
+        "source": source,
+        "apply_url": url or "#",
+        "description": description,
+        "has_full_description": True,
+        "skills": matched_skills,
+        "posted_date": "Imported just now",
+        "posted_timestamp": now_epoch,
+        "scraped_at": now_iso,
+        "status": "new",
+        "notes": "Directly imported job",
+        "match_score": ai_score,
+        "ai_score": ai_score,
+        "ai_summary": ai_summary,
+        "matched_skills": matched_skills,
+        "missing_skills": missing_skills,
+        "is_relevant": is_relevant,
+        "is_expired": False,
+        "liveness_status": "active"
+    }
+
+    upsert_job(job_record)
+    if ai_score is not None:
+        update_job_ai_analysis(job_id, ai_score, ai_summary, matched_skills, missing_skills, is_relevant)
+
+    return {"status": "success", "message": "Job successfully imported and scored!", "job": job_record}
+
+@app.post("/api/jobs/{job_id}/check-liveness")
+def check_single_job_liveness(job_id: str):
+    job = get_job_by_id(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    res = check_url_liveness(job["apply_url"])
+    update_job_liveness(job_id, res["is_expired"], res["status"])
+    return {"status": "success", "id": job_id, "liveness": res}
 
 @app.post("/api/scrape")
 def trigger_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks):

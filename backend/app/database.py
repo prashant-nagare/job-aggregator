@@ -49,7 +49,12 @@ def init_db():
         ("exp_min", "INTEGER"),
         ("exp_max", "INTEGER"),
         ("posted_timestamp", "INTEGER"),
-        ("has_full_description", "INTEGER DEFAULT 0")
+        ("has_full_description", "INTEGER DEFAULT 0"),
+        ("ai_score", "INTEGER"),
+        ("ai_summary", "TEXT"),
+        ("matched_skills", "TEXT"),
+        ("missing_skills", "TEXT"),
+        ("is_relevant", "INTEGER DEFAULT 0")
     ]
     for col_name, col_type in new_cols:
         if col_name not in columns:
@@ -217,6 +222,37 @@ def update_job_description(job_id: str, description: str, exp_min: Optional[int]
     conn.close()
     return affected
 
+def update_job_ai_analysis(
+    job_id: str,
+    ai_score: int,
+    ai_summary: str,
+    matched_skills: List[str],
+    missing_skills: List[str],
+    is_relevant: bool
+) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE jobs SET
+            ai_score = ?,
+            ai_summary = ?,
+            matched_skills = ?,
+            missing_skills = ?,
+            is_relevant = ?
+        WHERE id = ?
+    """, (
+        ai_score,
+        ai_summary,
+        json.dumps(matched_skills),
+        json.dumps(missing_skills),
+        1 if is_relevant else 0,
+        job_id
+    ))
+    affected = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return affected
+
 def get_job_by_id(job_id: str) -> Optional[Dict[str, Any]]:
     conn = get_connection()
     cursor = conn.cursor()
@@ -228,10 +264,12 @@ def get_job_by_id(job_id: str) -> Optional[Dict[str, Any]]:
     d = dict(row)
     d['is_remote'] = bool(d['is_remote'])
     d['has_full_description'] = bool(d.get('has_full_description', 0))
-    try:
-        d['skills'] = json.loads(d['skills']) if d['skills'] else []
-    except:
-        d['skills'] = []
+    d['is_relevant'] = bool(d.get('is_relevant', 0))
+    for key in ['skills', 'matched_skills', 'missing_skills']:
+        try:
+            d[key] = json.loads(d[key]) if d.get(key) else []
+        except:
+            d[key] = []
     return d
 
 def get_jobs(
@@ -244,6 +282,8 @@ def get_jobs(
     date_range: Optional[str] = None,
     exp_min: Optional[int] = None,
     exp_max: Optional[int] = None,
+    min_ai_score: Optional[int] = None,
+    only_relevant: bool = False,
     limit: int = 100,
     offset: int = 0
 ) -> List[Dict[str, Any]]:
@@ -269,6 +309,13 @@ def get_jobs(
     if is_remote is not None:
         query += " AND is_remote = ?"
         params.append(1 if is_remote else 0)
+
+    if min_ai_score is not None:
+        query += " AND (ai_score IS NOT NULL AND ai_score >= ?)"
+        params.append(min_ai_score)
+
+    if only_relevant:
+        query += " AND is_relevant = 1"
 
     # Locations filter
     if not open_to_all_india and locations and len(locations) > 0 and locations != ["all"]:
@@ -316,10 +363,12 @@ def get_jobs(
         d = dict(r)
         d['is_remote'] = bool(d['is_remote'])
         d['has_full_description'] = bool(d.get('has_full_description', 0))
-        try:
-            d['skills'] = json.loads(d['skills']) if d['skills'] else []
-        except:
-            d['skills'] = []
+        d['is_relevant'] = bool(d.get('is_relevant', 0))
+        for key in ['skills', 'matched_skills', 'missing_skills']:
+            try:
+                d[key] = json.loads(d[key]) if d.get(key) else []
+            except:
+                d[key] = []
         results.append(d)
         
     conn.close()

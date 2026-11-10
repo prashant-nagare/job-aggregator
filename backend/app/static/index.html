@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>JobScout Pro — Multi-Portal Job Aggregator & Tracker</title>
+  <title>JobScout Pro — Multi-Portal Job Aggregator & AI Resume Matcher</title>
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -101,6 +101,8 @@
       const [viewMode, setViewMode] = useState('feed'); // 'feed' | 'kanban'
       const [filterDateRange, setFilterDateRange] = useState('any');
       const [filterExpRange, setFilterExpRange] = useState('all');
+      const [minAiScore, setMinAiScore] = useState('all'); // 'all', '60', '70', '80', '90'
+      const [onlyRelevant, setOnlyRelevant] = useState(false);
 
       // Scraper Form State (Auto-Remembered)
       const [scrapeKeywords, setScrapeKeywords] = useState(["Python Developer"]);
@@ -122,19 +124,34 @@
       const [schedulerStatus, setSchedulerStatus] = useState({});
       const [schedulerLoading, setSchedulerLoading] = useState(false);
 
+      // AI Matcher & Resume State
+      const [resumeData, setResumeData] = useState({ has_resume: false });
+      const [aiConfig, setAiConfig] = useState({ provider: 'gemini', has_key: false, masked_key: '', model: 'gemini-1.5-flash', auto_filter_min_score: 70 });
+      const [showResumeModal, setShowResumeModal] = useState(false);
+      const [showAiModal, setShowAiModal] = useState(false);
+      const [evaluatingAll, setEvaluatingAll] = useState(false);
+      const [uploadingResume, setUploadingResume] = useState(false);
+      const [resumeUploadError, setResumeUploadError] = useState(null);
+
+      // AI Settings Form
+      const [aiProviderInput, setAiProviderInput] = useState('gemini');
+      const [aiKeyInput, setAiKeyInput] = useState('');
+      const [aiModelInput, setAiModelInput] = useState('gemini-1.5-flash');
+
       // Drawer / Inspection
       const [activeJob, setActiveJob] = useState(null);
       const [notesText, setNotesText] = useState('');
       const [detailLoading, setDetailLoading] = useState(false);
+      const [evaluatingSingle, setEvaluatingSingle] = useState(false);
 
-      // Load data, saved config & scheduler on mount
       useEffect(() => {
         fetchJobs();
         fetchStats();
         loadSavedConfig();
         fetchSchedulerStatus();
+        fetchResumeInfo();
+        fetchAiConfig();
 
-        // Refresh scheduler status every 30 seconds
         const timer = setInterval(() => {
           fetchSchedulerStatus();
         }, 30000);
@@ -195,6 +212,127 @@
           setAutoScrapeEnabled(Boolean(data.enabled));
         } catch (err) {
           console.error('Error fetching scheduler status:', err);
+        }
+      };
+
+      const fetchResumeInfo = async () => {
+        try {
+          const res = await fetch('/api/resume');
+          const data = await res.json();
+          setResumeData(data);
+        } catch (err) {
+          console.error('Error fetching resume info:', err);
+        }
+      };
+
+      const fetchAiConfig = async () => {
+        try {
+          const res = await fetch('/api/ai/config');
+          const data = await res.json();
+          setAiConfig(data);
+          setAiProviderInput(data.provider || 'gemini');
+          setAiModelInput(data.model || (data.provider === 'openai' ? 'gpt-4o-mini' : 'gemini-1.5-flash'));
+        } catch (err) {
+          console.error('Error fetching AI config:', err);
+        }
+      };
+
+      const handleSaveAiConfig = async (e) => {
+        e?.preventDefault();
+        try {
+          const res = await fetch('/api/ai/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              provider: aiProviderInput,
+              api_key: aiKeyInput,
+              model: aiModelInput,
+              auto_filter_min_score: 70,
+              auto_evaluate_on_scrape: true
+            })
+          });
+          if (res.ok) {
+            fetchAiConfig();
+            setShowAiModal(false);
+            setAiKeyInput('');
+          }
+        } catch (err) {
+          console.error('Error saving AI config:', err);
+        }
+      };
+
+      const handleFileUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (!file.name.toLowerCase().endsWith('.pdf')) {
+          setResumeUploadError('Please select a valid PDF file.');
+          return;
+        }
+
+        setUploadingResume(true);
+        setResumeUploadError(null);
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+          const res = await fetch('/api/resume/upload', {
+            method: 'POST',
+            body: formData
+          });
+          const data = await res.json();
+          if (res.ok) {
+            fetchResumeInfo();
+            fetchJobs();
+          } else {
+            setResumeUploadError(data.detail || 'Failed to parse resume.');
+          }
+        } catch (err) {
+          setResumeUploadError('Error uploading resume file.');
+        } finally {
+          setUploadingResume(false);
+        }
+      };
+
+      const handleEvaluateAll = async () => {
+        setEvaluatingAll(true);
+        try {
+          const res = await fetch('/api/jobs/evaluate-all', { method: 'POST' });
+          if (res.ok) {
+            // Poll jobs to show live updates
+            setTimeout(fetchJobs, 2500);
+            setTimeout(fetchJobs, 6000);
+          }
+        } catch (err) {
+          console.error('Error evaluating all:', err);
+        } finally {
+          setTimeout(() => setEvaluatingAll(false), 3000);
+        }
+      };
+
+      const handleEvaluateSingle = async (jobId) => {
+        setEvaluatingSingle(true);
+        try {
+          const res = await fetch(`/api/jobs/${jobId}/evaluate`, { method: 'POST' });
+          const data = await res.json();
+          if (res.ok && data.analysis) {
+            const an = data.analysis;
+            setActiveJob(prev => prev && prev.id === jobId ? { ...prev, ai_score: an.match_score, ai_summary: an.ai_summary, matched_skills: an.matched_skills, missing_skills: an.missing_skills, is_relevant: an.is_relevant } : prev);
+            setJobs(prev => prev.map(j => j.id === jobId ? { ...j, ai_score: an.match_score, ai_summary: an.ai_summary, matched_skills: an.matched_skills, missing_skills: an.missing_skills, is_relevant: an.is_relevant } : j));
+          }
+        } catch (err) {
+          console.error('Error evaluating single job:', err);
+        } finally {
+          setEvaluatingSingle(false);
+        }
+      };
+
+      const handleDeleteResume = async () => {
+        if (!confirm('Are you sure you want to remove your uploaded resume?')) return;
+        try {
+          await fetch('/api/resume', { method: 'DELETE' });
+          fetchResumeInfo();
+        } catch (err) {
+          console.error('Error deleting resume:', err);
         }
       };
 
@@ -261,7 +399,6 @@
             setScrapeMessage({ type: 'success', text: data.message });
             fetchJobs();
             fetchStats();
-            // Also update scheduler's saved config
             fetchSchedulerStatus();
           } else {
             setScrapeMessage({ type: 'error', text: data.detail || 'Failed to scrape' });
@@ -273,7 +410,6 @@
         }
       };
 
-      // Role Keywords Tag Helpers
       const addRoleKeyword = (role) => {
         const clean = role.trim();
         if (clean && !scrapeKeywords.includes(clean)) {
@@ -297,7 +433,6 @@
         }
       };
 
-      // Experience Range Tag Helpers
       const toggleExpRange = (expId) => {
         if (expId === 'all') {
           setScrapeExpRanges(['all']);
@@ -313,7 +448,6 @@
         setScrapeExpRanges(updated);
       };
 
-      // Location Tag Helpers
       const toggleLocationTag = (loc) => {
         if (openToAllIndia) setOpenToAllIndia(false);
         setScrapeLocations(prev => 
@@ -414,6 +548,14 @@
           if (selectedPortal !== 'all' && job.source !== selectedPortal) return false;
           if (remoteOnly && !job.is_remote) return false;
 
+          // AI Minimum Match Filter
+          if (minAiScore !== 'all') {
+            const threshold = parseInt(minAiScore);
+            if (job.ai_score === null || job.ai_score === undefined || job.ai_score < threshold) return false;
+          }
+
+          if (onlyRelevant && !job.is_relevant) return false;
+
           // Date Posted Filter
           if (filterDateRange !== 'any' && dateCutoffs[filterDateRange]) {
             const cutoff = nowSec - dateCutoffs[filterDateRange];
@@ -450,7 +592,7 @@
 
           return true;
         });
-      }, [jobs, selectedStatus, selectedPortal, remoteOnly, filterDateRange, filterExpRange, searchQuery]);
+      }, [jobs, selectedStatus, selectedPortal, remoteOnly, filterDateRange, filterExpRange, minAiScore, onlyRelevant, searchQuery]);
 
       const toggleSource = (src) => {
         setScrapeSources(prev => 
@@ -473,20 +615,49 @@
                       JobScout Pro
                     </span>
                     <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
-                      Aggregator
+                      AI Powered
                     </span>
                   </div>
-                  <p className="text-xs text-slate-400">Scrape, aggregate & apply efficiently across all portals</p>
+                  <p className="text-xs text-slate-400">Smart Resume Matching & Multi-Portal Job Tracker</p>
                 </div>
               </div>
 
-              {/* Auto-Scrape Scheduler Badge & Toggle */}
+              {/* Action Buttons: Resume, AI Config, Auto-Scrape, Scraper */}
               <div className="flex items-center gap-2">
+                {/* Resume Upload / Status Button */}
+                <button
+                  type="button"
+                  onClick={() => setShowResumeModal(true)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border ${
+                    resumeData.has_resume
+                      ? 'bg-purple-950/60 border-purple-500/80 text-purple-300 shadow-sm'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                  }`}
+                  title={resumeData.has_resume ? `Resume active: ${resumeData.filename}` : 'Upload your resume PDF to enable AI matching'}
+                >
+                  <span>📄</span>
+                  <span>{resumeData.has_resume ? 'Resume: Active' : 'Upload Resume'}</span>
+                  {resumeData.has_resume && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>}
+                </button>
+
+                {/* AI Settings Button */}
+                <button
+                  type="button"
+                  onClick={() => setShowAiModal(true)}
+                  className="px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 transition flex items-center gap-1.5"
+                  title="Configure Gemini or OpenAI API Key"
+                >
+                  <span>🤖</span>
+                  <span className="hidden sm:inline">{aiConfig.provider === 'openai' ? 'OpenAI' : 'Gemini'}</span>
+                  {aiConfig.has_key && <span className="text-[10px] text-emerald-400">✓</span>}
+                </button>
+
+                {/* Auto-Scrape Scheduler Badge & Toggle */}
                 <button
                   type="button"
                   onClick={toggleAutoScraper}
                   disabled={schedulerLoading}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 border ${
+                  className={`hidden md:flex px-3 py-1.5 rounded-xl text-xs font-bold transition items-center gap-2 border ${
                     autoScrapeEnabled
                       ? 'bg-emerald-950/60 border-emerald-500/80 text-emerald-300 shadow-md shadow-emerald-500/10'
                       : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
@@ -499,20 +670,20 @@
 
                 <button
                   onClick={() => setShowScraperPanel(!showScraperPanel)}
-                  className={`px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-2 ${
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition flex items-center gap-1.5 ${
                     showScraperPanel 
                       ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' 
                       : 'bg-indigo-500/10 text-indigo-300 border border-indigo-500/30 hover:bg-indigo-500/20'
                   }`}
                 >
                   <span>🔍</span>
-                  <span>{showScraperPanel ? 'Close Scraper' : 'Scrape Portals'}</span>
+                  <span>{showScraperPanel ? 'Close Scraper' : 'Scrape'}</span>
                 </button>
 
                 <a
                   href="/api/export"
                   download="jobs_export.csv"
-                  className="hidden sm:flex px-3.5 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition items-center gap-1.5"
+                  className="hidden lg:flex px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition items-center gap-1.5"
                 >
                   <span>📥</span>
                   <span>CSV</span>
@@ -562,7 +733,7 @@
                   <div className="md:col-span-4 p-3 rounded-xl bg-slate-900/70 border border-slate-800">
                     <div className="flex items-center justify-between mb-2">
                       <label className="text-xs font-semibold text-slate-300 flex items-center gap-2">
-                        <span>🎯 Job Roles / Keywords:</span>
+                        <span>🎯 Target Job Roles / Keywords:</span>
                         <span className="text-[11px] text-slate-400 font-normal">Add multiple roles using the + buttons</span>
                       </label>
                       <span className="text-[11px] text-slate-500">{scrapeKeywords.length} active role(s)</span>
@@ -904,8 +1075,24 @@
                 )}
               </div>
 
-              {/* Toolbar Dropdowns */}
+              {/* Toolbar Dropdowns & AI Filters */}
               <div className="flex flex-wrap items-center gap-2">
+                {/* AI Match Filter */}
+                <select
+                  value={minAiScore}
+                  onChange={(e) => setMinAiScore(e.target.value)}
+                  className={`bg-slate-900 border rounded-xl px-2.5 py-2 text-xs font-semibold focus:outline-none focus:border-indigo-500 transition ${
+                    minAiScore !== 'all' ? 'border-indigo-500 text-indigo-300 ring-1 ring-indigo-500' : 'border-slate-800 text-slate-300'
+                  }`}
+                  title="Filter jobs by AI Resume Match Score"
+                >
+                  <option value="all">🎯 Match: All</option>
+                  <option value="60">🎯 Match: 60%+</option>
+                  <option value="70">🎯 Match: 70%+ (Good)</option>
+                  <option value="80">🎯 Match: 80%+ (High)</option>
+                  <option value="90">🎯 Match: 90%+ (Top Fit)</option>
+                </select>
+
                 {/* Date Posted Filter */}
                 <select
                   value={filterDateRange}
@@ -928,12 +1115,12 @@
                   className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
                   title="Filter by experience range"
                 >
-                  <option value="all">🎓 Exp: All Levels</option>
-                  <option value="0-1">🎓 0-1 yrs (Fresher)</option>
-                  <option value="1-3">🎓 1-3 yrs (Junior)</option>
-                  <option value="3-5">🎓 3-5 yrs (Mid)</option>
-                  <option value="5-8">🎓 5-8 yrs (Senior)</option>
-                  <option value="8+">🎓 8+ yrs (Lead)</option>
+                  <option value="all">🎓 Exp: All</option>
+                  <option value="0-1">🎓 0-1 yrs</option>
+                  <option value="1-3">🎓 1-3 yrs</option>
+                  <option value="3-5">🎓 3-5 yrs</option>
+                  <option value="5-8">🎓 5-8 yrs</option>
+                  <option value="8+">🎓 8+ yrs</option>
                 </select>
 
                 {/* Portal filter */}
@@ -1030,14 +1217,24 @@
                 <div className="text-4xl mb-3">🔍</div>
                 <h4 className="text-base font-bold text-white mb-1">No jobs match your current filter</h4>
                 <p className="text-xs text-slate-400 max-w-sm mx-auto mb-4">
-                  Try adjusting the date range, experience level, or trigger a fresh scrape.
+                  Try lowering the AI Match threshold or trigger a fresh scrape.
                 </p>
-                <button
-                  onClick={() => setShowScraperPanel(true)}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow"
-                >
-                  Open Live Scraper
-                </button>
+                <div className="flex justify-center gap-2">
+                  {minAiScore !== 'all' && (
+                    <button
+                      onClick={() => setMinAiScore('all')}
+                      className="px-3.5 py-1.5 bg-slate-800 text-slate-300 text-xs font-semibold rounded-lg hover:text-white"
+                    >
+                      Clear Match Filter
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowScraperPanel(true)}
+                    className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow"
+                  >
+                    Open Scraper
+                  </button>
+                </div>
               </div>
             ) : viewMode === 'feed' ? (
               /* Feed View */
@@ -1063,6 +1260,221 @@
               />
             )}
           </main>
+
+          {/* Resume Upload Modal */}
+          {showResumeModal && (
+            <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+              <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">📄</span>
+                    <h3 className="font-bold text-base text-white">Resume & Candidate Profile</h3>
+                  </div>
+                  <button onClick={() => setShowResumeModal(false)} className="text-slate-400 hover:text-white text-lg">✕</button>
+                </div>
+
+                <div className="mt-4">
+                  {/* Upload Box */}
+                  <div className="border-2 border-dashed border-slate-700 hover:border-indigo-500 rounded-2xl p-6 text-center transition cursor-pointer relative bg-slate-950/60 mb-4">
+                    <input
+                      type="file"
+                      accept=".pdf"
+                      onChange={handleFileUpload}
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                    />
+                    <div className="text-3xl mb-2">📤</div>
+                    <p className="text-xs font-bold text-white mb-1">
+                      {uploadingResume ? 'Extracting & Analyzing Resume...' : 'Click or Drag & Drop Resume PDF'}
+                    </p>
+                    <p className="text-[11px] text-slate-400">PDF files up to 10MB supported</p>
+                  </div>
+
+                  {resumeUploadError && (
+                    <div className="p-3 mb-4 rounded-xl bg-rose-950/50 border border-rose-800 text-xs text-rose-300">
+                      {resumeUploadError}
+                    </div>
+                  )}
+
+                  {/* Active Resume Details */}
+                  {resumeData.has_resume && resumeData.profile && (
+                    <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 mb-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                          <span>✓ Active Resume:</span>
+                          <span className="text-white font-medium">{resumeData.filename}</span>
+                        </span>
+                        <button onClick={handleDeleteResume} className="text-xs text-rose-400 hover:text-rose-300">
+                          Remove
+                        </button>
+                      </div>
+
+                      <div className="space-y-2 text-xs text-slate-300">
+                        {resumeData.profile.target_title && (
+                          <div>
+                            <span className="text-slate-500 font-semibold">Target Role: </span>
+                            <span className="text-indigo-300 font-bold">{resumeData.profile.target_title}</span>
+                          </div>
+                        )}
+                        {resumeData.profile.years_of_experience && (
+                          <div>
+                            <span className="text-slate-500 font-semibold">Experience: </span>
+                            <span>~{resumeData.profile.years_of_experience} years</span>
+                          </div>
+                        )}
+                        {resumeData.profile.summary && (
+                          <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 italic text-[11px]">
+                            "{resumeData.profile.summary}"
+                          </div>
+                        )}
+                        {resumeData.profile.skills && resumeData.profile.skills.length > 0 && (
+                          <div>
+                            <span className="text-slate-500 font-semibold block mb-1">Extracted Skills:</span>
+                            <div className="flex flex-wrap gap-1">
+                              {resumeData.profile.skills.map((s, idx) => (
+                                <span key={idx} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px] border border-slate-700">
+                                  {s}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                    {resumeData.has_resume && (
+                      <button
+                        type="button"
+                        onClick={handleEvaluateAll}
+                        disabled={evaluatingAll}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-md shadow-indigo-600/30 flex items-center gap-1.5 transition"
+                      >
+                        {evaluatingAll ? 'Analyzing All Jobs...' : '⚡ Re-Analyze All Jobs with AI'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowResumeModal(false)}
+                      className="px-4 py-2 bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold rounded-xl"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* AI Settings Modal */}
+          {showAiModal && (
+            <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+              <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">🤖</span>
+                    <h3 className="font-bold text-base text-white">AI Provider Configuration</h3>
+                  </div>
+                  <button onClick={() => setShowAiModal(false)} className="text-slate-400 hover:text-white text-lg">✕</button>
+                </div>
+
+                <form onSubmit={handleSaveAiConfig} className="mt-4 space-y-4">
+                  {/* Provider Radio */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-2">Select AI Engine:</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAiProviderInput('gemini');
+                          setAiModelInput('gemini-1.5-flash');
+                        }}
+                        className={`p-3 rounded-xl border text-left transition flex flex-col justify-between ${
+                          aiProviderInput === 'gemini'
+                            ? 'bg-blue-950/60 border-blue-500 text-white ring-1 ring-blue-500'
+                            : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <span className="font-bold text-xs text-blue-400">Google Gemini</span>
+                        <span className="text-[10px] text-slate-400 mt-1">Recommended • Free Tier</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAiProviderInput('openai');
+                          setAiModelInput('gpt-4o-mini');
+                        }}
+                        className={`p-3 rounded-xl border text-left transition flex flex-col justify-between ${
+                          aiProviderInput === 'openai'
+                            ? 'bg-emerald-950/60 border-emerald-500 text-white ring-1 ring-emerald-500'
+                            : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <span className="font-bold text-xs text-emerald-400">OpenAI</span>
+                        <span className="text-[10px] text-slate-400 mt-1">GPT-4o-mini / GPT-4o</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* API Key */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-semibold text-slate-300">
+                        {aiProviderInput === 'gemini' ? 'Google Gemini API Key' : 'OpenAI API Key'}
+                      </label>
+                      {aiConfig.has_key && (
+                        <span className="text-[11px] text-emerald-400 font-semibold">
+                          Active: {aiConfig.masked_key}
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      type="password"
+                      value={aiKeyInput}
+                      onChange={(e) => setAiKeyInput(e.target.value)}
+                      placeholder={aiConfig.has_key ? "Leave blank to keep existing key" : "Paste API key (AIzaSy... / sk-...)"}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      {aiProviderInput === 'gemini' 
+                        ? 'Get free key at: aistudio.google.com/app/apikey' 
+                        : 'Get key at: platform.openai.com/api-keys'}
+                    </p>
+                  </div>
+
+                  {/* Model */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">Model</label>
+                    <input
+                      type="text"
+                      value={aiModelInput}
+                      onChange={(e) => setAiModelInput(e.target.value)}
+                      placeholder="e.g. gemini-1.5-flash or gpt-4o-mini"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setShowAiModal(false)}
+                      className="px-4 py-2 bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold rounded-xl"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl shadow-md shadow-indigo-600/30 transition"
+                    >
+                      Save Configuration
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
 
           {/* Job Inspection / Full Details Drawer */}
           {activeJob && (
@@ -1090,6 +1502,77 @@
                 <div className="mt-4 flex-1">
                   <h2 className="text-xl font-bold text-white leading-tight mb-1">{activeJob.title}</h2>
                   <p className="text-sm font-semibold text-indigo-400 mb-3">{activeJob.company}</p>
+
+                  {/* AI Match Breakdown Card */}
+                  <div className="p-4 rounded-xl bg-gradient-to-br from-indigo-950/50 to-slate-900 border border-indigo-900/60 mb-5">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg">🎯</span>
+                        <span className="text-xs font-bold uppercase tracking-wider text-indigo-300">
+                          AI Resume Match Evaluation
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {activeJob.ai_score !== null && activeJob.ai_score !== undefined ? (
+                          <span className={`px-2.5 py-1 rounded-full text-xs font-extrabold border ${
+                            activeJob.ai_score >= 80 
+                              ? 'bg-emerald-950 text-emerald-300 border-emerald-600'
+                              : activeJob.ai_score >= 60
+                              ? 'bg-amber-950 text-amber-300 border-amber-600'
+                              : 'bg-slate-800 text-slate-400 border-slate-700'
+                          }`}>
+                            {activeJob.ai_score}% Match
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-500">Unscored</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleEvaluateSingle(activeJob.id)}
+                          disabled={evaluatingSingle}
+                          className="px-2 py-1 rounded-lg bg-indigo-600/60 hover:bg-indigo-600 text-[10px] font-bold text-white transition"
+                          title="Re-run AI Match evaluation on this job"
+                        >
+                          {evaluatingSingle ? '...' : '⚡ Evaluate'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* AI Verdict */}
+                    {activeJob.ai_summary && (
+                      <p className="text-xs text-slate-300 italic mb-3 bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80">
+                        "{activeJob.ai_summary}"
+                      </p>
+                    )}
+
+                    {/* Matched Skills */}
+                    {activeJob.matched_skills && activeJob.matched_skills.length > 0 && (
+                      <div className="mb-2">
+                        <span className="text-[11px] font-semibold text-emerald-400 block mb-1">✓ Skills You Have for this Role:</span>
+                        <div className="flex flex-wrap gap-1">
+                          {activeJob.matched_skills.map((s, idx) => (
+                            <span key={idx} className="px-2 py-0.5 rounded bg-emerald-950/50 text-emerald-300 text-[10px] border border-emerald-800/60">
+                              ✓ {s}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Missing Skills */}
+                    {activeJob.missing_skills && activeJob.missing_skills.length > 0 && (
+                      <div>
+                        <span className="text-[11px] font-semibold text-amber-400 block mb-1">⚠ Requirements Missing from Resume:</span>
+                        <div className="flex flex-wrap gap-1">
+                          {activeJob.missing_skills.map((s, idx) => (
+                            <span key={idx} className="px-2 py-0.5 rounded bg-amber-950/50 text-amber-300 text-[10px] border border-amber-800/60">
+                              {s}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
 
                   {/* Metadata Chips */}
                   <div className="flex flex-wrap gap-2 mb-4 text-xs">
@@ -1247,12 +1730,26 @@
       return (
         <div className="bg-slate-900/90 border border-slate-800/80 hover:border-slate-700 rounded-2xl p-5 flex flex-col justify-between transition-all duration-200 hover:shadow-xl hover:shadow-indigo-500/5 group">
           <div>
-            {/* Top row: Portal badge & status dot */}
+            {/* Top row: Portal badge, AI Match score & status dot */}
             <div className="flex items-center justify-between gap-2 mb-3">
               <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${portal.bg} ${portal.text} ${portal.border}`}>
                 {portal.label}
               </span>
+
               <div className="flex items-center gap-2">
+                {/* AI Match Badge */}
+                {job.ai_score !== null && job.ai_score !== undefined && (
+                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold border ${
+                    job.ai_score >= 80 
+                      ? 'bg-emerald-950/70 text-emerald-300 border-emerald-600'
+                      : job.ai_score >= 60
+                      ? 'bg-amber-950/70 text-amber-300 border-amber-600'
+                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                  }`}>
+                    🎯 {job.ai_score}%
+                  </span>
+                )}
+
                 <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border ${statusConf.color}`}>
                   <span className={`w-1.5 h-1.5 rounded-full ${statusConf.dot}`}></span>
                   <span>{statusConf.label}</span>
@@ -1275,6 +1772,13 @@
               {job.title}
             </h3>
             <p className="text-xs font-medium text-slate-400 mb-3 line-clamp-1">{job.company}</p>
+
+            {/* AI Summary excerpt if available */}
+            {job.ai_summary && (
+              <p className="text-[11px] text-slate-400 line-clamp-1 italic mb-2.5">
+                💡 {job.ai_summary}
+              </p>
+            )}
 
             {/* Metadata badges: Location, Remote, Experience, Salary */}
             <div className="flex flex-wrap items-center gap-1.5 mb-3 text-[11px] text-slate-300">
@@ -1370,7 +1874,13 @@
                         <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">
                           {j.source}
                         </span>
-                        <span className="text-[10px] text-slate-500">{j.posted_date || ''}</span>
+                        {j.ai_score !== null && j.ai_score !== undefined && (
+                          <span className={`text-[10px] font-extrabold px-1.5 py-0.2 rounded ${
+                            j.ai_score >= 80 ? 'text-emerald-300 bg-emerald-950/80' : 'text-amber-300 bg-amber-950/80'
+                          }`}>
+                            🎯 {j.ai_score}%
+                          </span>
+                        )}
                       </div>
                       <h5 className="text-xs font-bold text-white group-hover:text-indigo-300 line-clamp-1 mb-0.5">
                         {j.title}

@@ -32,7 +32,19 @@ Applying for jobs across multiple portals (**LinkedIn**, **Instahyre**, **Indeed
 
 ## 🚀 Key Features
 
-### 1. Multi-Portal Live Scraping Engine
+### 1. AI Resume Matcher & Automatic Relevance Filtering (Gemini & OpenAI)
+* **PDF Resume Upload**: Directly upload your resume PDF (parsed on the fly via `pypdf`).
+* **Candidate Profile Extraction**: AI automatically extracts your core tech stack, years of experience, domain strengths, and career focus.
+* **Match Score & Assessment (0 - 100%)**:
+  * Evaluates technical skill overlap, seniority alignment, and domain relevance.
+  * Identifies **Matched Skills** (green badges) and **Missing Skills** (orange warning tags) for each job.
+  * Generates an honest 1-2 sentence AI verdict on your fit for the role.
+* **Zero-Intervention Filtering**:
+  * Filter jobs instantly by `🎯 Min Match: 60%+, 70%+, 80%+, 90%+`.
+  * The 2-hour background auto-scraper automatically evaluates and scores all newly discovered listings against your resume!
+* **Provider Flexibility**: Supports **Google Gemini** (`gemini-1.5-flash`, `gemini-2.0-flash`) and **OpenAI** (`gpt-4o-mini`, `gpt-4o`), plus an offline heuristic matcher if no API key is set.
+
+### 2. Multi-Portal Live Scraping Engine
 * **LinkedIn**: Uses LinkedIn's public guest job search endpoint (no credentials needed) + optional dummy account `li_at` cookie to bypass guest rate limits.
 * **Instahyre**: Scrapes curated Indian tech openings (Adobe, Amazon, Swiggy, Flipkart, and funded startups) with clean skill tags and requirements.
 * **Indeed**: TLS-fingerprinted browser sessions (`curl_cffi`) for anti-bot bypass.

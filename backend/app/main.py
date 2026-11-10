@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import Response, FileResponse
@@ -7,18 +7,23 @@ import io
 import csv
 import os
 import asyncio
+from datetime import datetime
 
-from app.models import JobBase, JobUpdateStatus, ScrapeRequest, SchedulerConfig
+from app.models import JobBase, JobUpdateStatus, ScrapeRequest, SchedulerConfig, AIConfig
 from app.database import (
     init_db, get_jobs, get_job_by_id, upsert_job, 
-    update_job_status, update_job_description, delete_job, get_stats,
-    get_setting, set_setting
+    update_job_status, update_job_description, update_job_ai_analysis,
+    delete_job, get_stats, get_setting, set_setting
 )
 from app.scrapers.aggregator import run_scraping_pipeline
 from app.scrapers.utils import fetch_job_detail, parse_experience
 from app.scheduler import scheduler
+from app.ai_matcher import (
+    extract_text_from_pdf, parse_resume_profile, 
+    evaluate_job_match, batch_evaluate_unscored_jobs
+)
 
-app = FastAPI(title="JobScout Aggregator API", version="1.2.0")
+app = FastAPI(title="JobScout Aggregator & AI Matcher API", version="1.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -73,6 +78,157 @@ def save_config(request: ScrapeRequest):
     set_setting("scraper_config", data)
     return {"status": "success", "message": "Scraper configuration saved", "config": data}
 
+# AI Settings API (Gemini & OpenAI)
+@app.get("/api/ai/config")
+def get_ai_configuration():
+    cfg = get_setting("ai_config", {
+        "provider": "gemini",
+        "api_key": "",
+        "model": "gemini-1.5-flash",
+        "auto_filter_min_score": 70,
+        "auto_evaluate_on_scrape": True
+    })
+    # Mask API key for security
+    masked_key = ""
+    raw_key = cfg.get("api_key", "")
+    if raw_key:
+        masked_key = raw_key[:4] + "..." + raw_key[-4:] if len(raw_key) > 8 else "***"
+    return {
+        "provider": cfg.get("provider", "gemini"),
+        "has_key": bool(raw_key),
+        "masked_key": masked_key,
+        "model": cfg.get("model", "gemini-1.5-flash"),
+        "auto_filter_min_score": cfg.get("auto_filter_min_score", 70),
+        "auto_evaluate_on_scrape": cfg.get("auto_evaluate_on_scrape", True)
+    }
+
+@app.post("/api/ai/config")
+def save_ai_configuration(config: AIConfig):
+    existing = get_setting("ai_config", {})
+    # If user provided a masked key or empty, preserve existing key if available
+    api_key = config.api_key.strip()
+    if not api_key or "..." in api_key or "***" in api_key:
+        api_key = existing.get("api_key", "")
+
+    new_cfg = {
+        "provider": config.provider,
+        "api_key": api_key,
+        "model": config.model,
+        "auto_filter_min_score": config.auto_filter_min_score,
+        "auto_evaluate_on_scrape": config.auto_evaluate_on_scrape
+    }
+    set_setting("ai_config", new_cfg)
+    return {"status": "success", "message": "AI settings updated successfully", "provider": config.provider}
+
+# Resume Management & PDF Upload
+@app.post("/api/resume/upload")
+async def upload_resume(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF resumes are supported.")
+
+    content = await file.read()
+    if len(content) == 0:
+        raise HTTPException(status_code=400, detail="Empty PDF file uploaded.")
+
+    try:
+        extracted_text = extract_text_from_pdf(content)
+        if not extracted_text or len(extracted_text.strip()) < 40:
+            raise HTTPException(status_code=400, detail="Could not extract readable text from this PDF. Please ensure it's not a scanned image.")
+
+        ai_cfg = get_setting("ai_config", {"provider": "gemini", "api_key": ""})
+        profile = parse_resume_profile(
+            resume_text=extracted_text,
+            provider=ai_cfg.get("provider", "gemini"),
+            api_key=ai_cfg.get("api_key", ""),
+            model=ai_cfg.get("model", "")
+        )
+
+        resume_payload = {
+            "filename": file.filename,
+            "text": extracted_text,
+            "profile": profile,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        set_setting("resume_data", resume_payload)
+
+        # Automatically evaluate existing unscored jobs in background
+        if background_tasks:
+            def run_background_eval():
+                unscored = get_jobs(limit=100)
+                batch_evaluate_unscored_jobs(unscored, resume_payload, ai_cfg)
+            background_tasks.add_task(run_background_eval)
+
+        return {
+            "status": "success",
+            "message": f"Resume '{file.filename}' parsed successfully!",
+            "profile": profile
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process PDF resume: {e}")
+
+@app.get("/api/resume")
+def get_current_resume():
+    data = get_setting("resume_data")
+    if not data:
+        return {"has_resume": False}
+    return {
+        "has_resume": True,
+        "filename": data.get("filename"),
+        "profile": data.get("profile"),
+        "updated_at": data.get("updated_at")
+    }
+
+@app.delete("/api/resume")
+def delete_resume():
+    set_setting("resume_data", None)
+    return {"status": "success", "message": "Resume removed."}
+
+# AI Job Evaluation Endpoints
+@app.post("/api/jobs/{job_id}/evaluate")
+def evaluate_single_job(job_id: str):
+    job = get_job_by_id(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    resume_data = get_setting("resume_data")
+    if not resume_data or not resume_data.get("profile"):
+        raise HTTPException(status_code=400, detail="Please upload your resume PDF first before running AI evaluation.")
+
+    ai_cfg = get_setting("ai_config", {"provider": "gemini", "api_key": ""})
+    res = evaluate_job_match(
+        resume_profile=resume_data.get("profile", {}),
+        resume_text=resume_data.get("text", ""),
+        job=job,
+        provider=ai_cfg.get("provider", "gemini"),
+        api_key=ai_cfg.get("api_key", ""),
+        model=ai_cfg.get("model", "")
+    )
+
+    update_job_ai_analysis(
+        job_id=job_id,
+        ai_score=res["match_score"],
+        ai_summary=res["ai_summary"],
+        matched_skills=res["matched_skills"],
+        missing_skills=res["missing_skills"],
+        is_relevant=res["is_relevant"]
+    )
+    return {"status": "success", "analysis": res}
+
+@app.post("/api/jobs/evaluate-all")
+async def evaluate_all_jobs(background_tasks: BackgroundTasks):
+    resume_data = get_setting("resume_data")
+    if not resume_data or not resume_data.get("profile"):
+        raise HTTPException(status_code=400, detail="Please upload your resume PDF first before evaluating.")
+
+    ai_cfg = get_setting("ai_config", {"provider": "gemini", "api_key": ""})
+
+    def run_eval():
+        jobs = get_jobs(limit=250)
+        batch_evaluate_unscored_jobs(jobs, resume_data, ai_cfg)
+
+    background_tasks.add_task(run_eval)
+    return {"status": "success", "message": "AI analysis started in background for all job listings."}
+
 # Scheduler API
 @app.get("/api/scheduler/status")
 def get_scheduler_status():
@@ -102,7 +258,9 @@ def list_jobs(
     exp_range: Optional[str] = Query(None),
     min_exp: Optional[int] = Query(None),
     max_exp: Optional[int] = Query(None),
-    limit: int = Query(50, ge=1, le=300),
+    min_ai_score: Optional[int] = Query(None),
+    only_relevant: bool = Query(False),
+    limit: int = Query(60, ge=1, le=300),
     offset: int = Query(0, ge=0)
 ):
     loc_list = [l.strip() for l in locations.split(",")] if locations else None
@@ -129,6 +287,8 @@ def list_jobs(
         date_range=date_range,
         exp_min=calc_min_exp,
         exp_max=calc_max_exp,
+        min_ai_score=min_ai_score,
+        only_relevant=only_relevant,
         limit=limit,
         offset=offset
     )
@@ -166,12 +326,11 @@ def remove_job(job_id: str):
     return {"message": "Job deleted successfully", "id": job_id}
 
 @app.post("/api/scrape")
-def trigger_scrape(request: ScrapeRequest):
+def trigger_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks):
     """
     Triggers live multi-portal scrape, saves configuration to remember user inputs,
-    and returns aggregated job count.
+    and automatically triggers AI evaluation if a resume is present.
     """
-    # Remember configuration for next sessions and scheduler
     set_setting("scraper_config", request.dict())
 
     stats = run_scraping_pipeline(
@@ -186,6 +345,16 @@ def trigger_scrape(request: ScrapeRequest):
         naukri_cookie=request.naukri_cookie or "",
         linkedin_cookie=request.linkedin_cookie or ""
     )
+
+    # Trigger background evaluation on unscored jobs
+    resume_data = get_setting("resume_data")
+    ai_cfg = get_setting("ai_config", {"provider": "gemini", "api_key": ""})
+    if resume_data and ai_cfg.get("auto_evaluate_on_scrape", True):
+        def run_eval():
+            unscored = get_jobs(limit=100)
+            batch_evaluate_unscored_jobs(unscored, resume_data, ai_cfg)
+        background_tasks.add_task(run_eval)
+
     return {
         "status": "success",
         "message": f"Scraped {stats['total_scraped']} jobs ({stats['new_inserted']} new).",
@@ -200,7 +369,8 @@ def export_jobs_csv(status: Optional[str] = None):
     
     writer.writerow([
         "ID", "Title", "Company", "Location", "Is Remote", "Salary",
-        "Experience", "Source", "Apply URL", "Status", "Notes", "Posted Date", "Scraped At"
+        "Experience", "AI Match Score", "AI Summary", "Source", "Apply URL", 
+        "Status", "Notes", "Posted Date", "Scraped At"
     ])
     
     for j in jobs:
@@ -212,6 +382,8 @@ def export_jobs_csv(status: Optional[str] = None):
             "Yes" if j.get("is_remote") else "No",
             j.get("salary") or "",
             j.get("experience") or "",
+            f"{j.get('ai_score')}%" if j.get("ai_score") is not None else "N/A",
+            j.get("ai_summary") or "",
             j.get("source"),
             j.get("apply_url"),
             j.get("status"),

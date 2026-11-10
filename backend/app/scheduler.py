@@ -99,6 +99,17 @@ class JobScheduler:
             self.next_run_epoch = time.time() + self.interval_seconds
             self.save_state()
             print(f"[Scheduler] {self.last_result}")
+
+            # Auto-run AI Evaluation on fresh jobs if resume is uploaded
+            resume_data = get_setting("resume_data")
+            ai_config = get_setting("ai_config", {"provider": "gemini", "api_key": "", "auto_evaluate_on_scrape": True})
+            if resume_data and ai_config.get("auto_evaluate_on_scrape", True):
+                from app.ai_matcher import batch_evaluate_unscored_jobs
+                from app.database import get_jobs
+                unscored = get_jobs(limit=100)
+                scored_cnt = batch_evaluate_unscored_jobs(unscored, resume_data, ai_config)
+                if scored_cnt > 0:
+                    print(f"[Scheduler AI] Evaluated {scored_cnt} new listings against resume.")
         except Exception as e:
             self.last_result = f"Error during auto-scrape: {e}"
             print(f"[Scheduler Error] {e}")

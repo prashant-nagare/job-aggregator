@@ -81,9 +81,15 @@ Applying for jobs across multiple portals (**LinkedIn**, **Instahyre**, **Indeed
 
 ### 6. Application Tracker & Productivity Tools
 * **Dual View Modes**:
-  * **Feed View**: Cards with platform color badges, location tags, salary indicators, and skills.
-  * **Kanban Board**: Drag/move jobs across stages (`New`, `Saved`, `Applied`, `Interviewing`, `Offer`, `Rejected`).
-* **⚡ 1-Click Quick Apply**: Clicking "Apply" opens the official portal posting in a new tab and automatically moves the card to `Applied`.
+  * **Feed View**: Cards with platform color badges, location tags, salary indicators, skills, and direct status toggles.
+  * **Kanban Board**: Move jobs across stages (`New`, `Saved`, `Applied`, `Interviewing`, `Offer`, `Rejected`, `Not Relevant`).
+* **⚡ Bulk Actions Bar**:
+  * Select multiple or all visible jobs with checkboxes.
+  * Bulk change status with 1 click (`Applied`, `Bookmarked`, `Rejected`, `Not Relevant`).
+  * Bulk delete unwanted job listings in one action.
+* **⚡ 1-Click Quick Apply & Status Actions**:
+  * "Apply" opens the official portal posting in a new tab and automatically moves the card to `Applied`.
+  * Dedicated `🚫 Not Relevant` quick button right on each card next to `Rejected` and delete.
 * **Notes & Follow-ups**: Add custom notes (interviewer details, referral contacts, salary discussion).
 * **CSV Export**: One-click export to download all tracked listings.
 * **Persistent Preferences**: Remembers all your keywords, locations, cookies, and filters across browser sessions.

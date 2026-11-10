@@ -74,6 +74,7 @@
       interviewing: { label: 'Interviewing', color: 'bg-purple-950/60 text-purple-300 border-purple-700/60', dot: 'bg-purple-400' },
       offer: { label: 'Offer', color: 'bg-emerald-950/60 text-emerald-300 border-emerald-700/60', dot: 'bg-emerald-400' },
       rejected: { label: 'Rejected', color: 'bg-red-950/60 text-red-300 border-red-700/60', dot: 'bg-red-400' },
+      not_relevant: { label: 'Not Relevant', color: 'bg-zinc-800/80 text-zinc-400 border-zinc-700', dot: 'bg-zinc-500' },
     };
 
     const PRESET_ROLES = ["Python Developer", "Full Stack Developer", "Backend Engineer", "Frontend Developer", "DevOps Engineer", "Data Engineer"];
@@ -123,6 +124,9 @@
       const [autoScrapeEnabled, setAutoScrapeEnabled] = useState(false);
       const [schedulerStatus, setSchedulerStatus] = useState({});
       const [schedulerLoading, setSchedulerLoading] = useState(false);
+
+      // Bulk Selection State
+      const [selectedJobIds, setSelectedJobIds] = useState([]);
 
       // AI Matcher & Resume State
       const [resumeData, setResumeData] = useState({ has_resume: false });
@@ -437,6 +441,69 @@
           setManualLocInput('');
           setNewToolName('');
           setNewToolExp('');
+        }
+      };
+
+      // Bulk Actions Helpers
+      const toggleSelectJob = (jobId) => {
+        setSelectedJobIds(prev => 
+          prev.includes(jobId) ? prev.filter(id => id !== jobId) : [...prev, jobId]
+        );
+      };
+
+      const toggleSelectAllFiltered = () => {
+        const filteredIds = filteredJobs.map(j => j.id);
+        const allSelected = filteredIds.length > 0 && filteredIds.every(id => selectedJobIds.includes(id));
+        if (allSelected) {
+          setSelectedJobIds(prev => prev.filter(id => !filteredIds.includes(id)));
+        } else {
+          const union = Array.from(new Set([...selectedJobIds, ...filteredIds]));
+          setSelectedJobIds(union);
+        }
+      };
+
+      const handleBulkStatusChange = async (newStatus) => {
+        if (selectedJobIds.length === 0) return;
+        try {
+          const res = await fetch('/api/jobs/bulk-status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_ids: selectedJobIds, status: newStatus })
+          });
+          const data = await res.json();
+          if (res.ok) {
+            setJobs(prev => prev.map(j => selectedJobIds.includes(j.id) ? { ...j, status: newStatus } : j));
+            fetchStats();
+            setSelectedJobIds([]);
+          } else {
+            alert(data.detail || 'Failed to update jobs in bulk.');
+          }
+        } catch (err) {
+          console.error('Error updating bulk status:', err);
+          alert('Error updating bulk status.');
+        }
+      };
+
+      const handleBulkDeleteJobs = async () => {
+        if (selectedJobIds.length === 0) return;
+        if (!confirm(`Are you sure you want to delete ${selectedJobIds.length} selected job listing(s)?`)) return;
+        try {
+          const res = await fetch('/api/jobs/bulk-delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_ids: selectedJobIds })
+          });
+          const data = await res.json();
+          if (res.ok) {
+            setJobs(prev => prev.filter(j => !selectedJobIds.includes(j.id)));
+            fetchStats();
+            setSelectedJobIds([]);
+          } else {
+            alert(data.detail || 'Failed to delete selected jobs.');
+          }
+        } catch (err) {
+          console.error('Error deleting bulk jobs:', err);
+          alert('Error deleting jobs.');
         }
       };
 
@@ -1478,17 +1545,47 @@
               </div>
             ) : viewMode === 'feed' ? (
               /* Feed View */
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredJobs.map(job => (
-                  <JobCard
-                    key={job.id}
-                    job={job}
-                    onQuickApply={() => handleQuickApply(job)}
-                    onStatusChange={(status) => updateStatus(job.id, status)}
-                    onInspect={() => loadJobDetails(job)}
-                    onDelete={() => deleteJob(job.id)}
-                  />
-                ))}
+              <div>
+                {/* Bulk selection toolbar */}
+                <div className="flex items-center justify-between mb-3 px-1 text-xs text-slate-400">
+                  <label className="flex items-center gap-2 cursor-pointer font-medium hover:text-white select-none">
+                    <input
+                      type="checkbox"
+                      checked={filteredJobs.length > 0 && filteredJobs.every(j => selectedJobIds.includes(j.id))}
+                      onChange={toggleSelectAllFiltered}
+                      className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-indigo-600 focus:ring-0 cursor-pointer"
+                    />
+                    <span>Select all visible ({filteredJobs.length} jobs)</span>
+                  </label>
+                  {selectedJobIds.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-indigo-400 font-bold">
+                        • {selectedJobIds.length} selected
+                      </span>
+                      <button
+                        onClick={() => setSelectedJobIds([])}
+                        className="text-[11px] text-slate-500 hover:text-slate-300 underline"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredJobs.map(job => (
+                    <JobCard
+                      key={job.id}
+                      job={job}
+                      isSelected={selectedJobIds.includes(job.id)}
+                      onToggleSelect={() => toggleSelectJob(job.id)}
+                      onQuickApply={() => handleQuickApply(job)}
+                      onStatusChange={(status) => updateStatus(job.id, status)}
+                      onInspect={() => loadJobDetails(job)}
+                      onDelete={() => deleteJob(job.id)}
+                    />
+                  ))}
+                </div>
               </div>
             ) : (
               /* Kanban Pipeline View */
@@ -1500,6 +1597,81 @@
               />
             )}
           </main>
+
+          {/* Floating Sticky Bulk Actions Bar */}
+          {selectedJobIds.length > 0 && (
+            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-slate-900/95 border border-indigo-500/70 shadow-2xl shadow-black/80 rounded-2xl p-3 px-4 sm:px-6 flex flex-wrap items-center gap-3 backdrop-blur-md">
+              <div className="flex items-center gap-2 pr-3 border-r border-slate-800">
+                <span className="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse"></span>
+                <span className="text-xs font-bold text-white whitespace-nowrap">
+                  {selectedJobIds.length} {selectedJobIds.length === 1 ? 'job' : 'jobs'} selected
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] text-slate-400 font-medium">Mark as:</span>
+                <button
+                  type="button"
+                  onClick={() => handleBulkStatusChange('applied')}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-blue-950/70 hover:bg-blue-900 border border-blue-700/60 text-blue-300 transition"
+                >
+                  Applied
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleBulkStatusChange('saved')}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-amber-950/70 hover:bg-amber-900 border border-amber-700/60 text-amber-300 transition"
+                >
+                  Bookmarked
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleBulkStatusChange('rejected')}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-red-950/70 hover:bg-red-900 border border-red-700/60 text-red-300 transition"
+                >
+                  Rejected
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleBulkStatusChange('not_relevant')}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-zinc-800/90 hover:bg-zinc-700 border border-zinc-600 text-zinc-300 transition flex items-center gap-1"
+                >
+                  <span>🚫</span>
+                  <span>Not Relevant</span>
+                </button>
+
+                <select
+                  onChange={(e) => { if (e.target.value) handleBulkStatusChange(e.target.value); }}
+                  defaultValue=""
+                  className="bg-slate-950 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-1 focus:outline-none"
+                >
+                  <option value="" disabled>More stages...</option>
+                  <option value="new">New</option>
+                  <option value="interviewing">Interviewing</option>
+                  <option value="offer">Offer</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 pl-3 border-l border-slate-800">
+                <button
+                  type="button"
+                  onClick={handleBulkDeleteJobs}
+                  className="px-3 py-1.5 text-xs font-bold rounded-xl bg-rose-600/20 hover:bg-rose-600 border border-rose-500/50 hover:border-rose-500 text-rose-300 hover:text-white transition flex items-center gap-1.5 shadow"
+                >
+                  <span>🗑️</span>
+                  <span>Delete Selected</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedJobIds([])}
+                  className="text-xs text-slate-400 hover:text-white px-2 py-1"
+                  title="Deselect all"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Resume & Profile Modal */}
           {showResumeModal && (
@@ -2528,20 +2700,33 @@
       );
     }
 
-    function JobCard({ job, onQuickApply, onStatusChange, onInspect, onDelete }) {
+    function JobCard({ job, isSelected, onToggleSelect, onQuickApply, onStatusChange, onInspect, onDelete }) {
       const portal = PORTAL_COLORS[job.source] || { bg: 'bg-slate-800', text: 'text-slate-400', border: 'border-slate-700', label: job.source };
       const statusConf = STATUS_CONFIG[job.status] || STATUS_CONFIG.new;
 
       return (
-        <div className="bg-slate-900/90 border border-slate-800/80 hover:border-slate-700 rounded-2xl p-5 flex flex-col justify-between transition-all duration-200 hover:shadow-xl hover:shadow-indigo-500/5 group">
+        <div className={`bg-slate-900/90 border ${
+          isSelected 
+            ? 'border-indigo-500 ring-2 ring-indigo-500/40 shadow-indigo-500/10' 
+            : 'border-slate-800/80 hover:border-slate-700'
+        } rounded-2xl p-5 flex flex-col justify-between transition-all duration-200 hover:shadow-xl hover:shadow-indigo-500/5 group relative`}>
           <div>
-            {/* Top row: Portal badge, AI Match score & status dot */}
+            {/* Top row: Checkbox, Portal badge, AI Match score & status */}
             <div className="flex items-center justify-between gap-2 mb-3">
-              <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${portal.bg} ${portal.text} ${portal.border}`}>
-                {portal.label}
-              </span>
-
               <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={Boolean(isSelected)}
+                  onChange={onToggleSelect}
+                  title="Select for bulk action"
+                  className="w-4 h-4 rounded border-slate-700 bg-slate-950 text-indigo-600 focus:ring-0 cursor-pointer"
+                />
+                <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${portal.bg} ${portal.text} ${portal.border}`}>
+                  {portal.label}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5">
                 {/* AI Match Badge */}
                 {job.ai_score !== null && job.ai_score !== undefined && (
                   <span className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold border ${
@@ -2555,14 +2740,29 @@
                   </span>
                 )}
 
+                {/* Status Badge */}
                 <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border ${statusConf.color}`}>
                   <span className={`w-1.5 h-1.5 rounded-full ${statusConf.dot}`}></span>
                   <span>{statusConf.label}</span>
                 </span>
+
+                {/* Quick Not Relevant Button */}
+                {job.status !== 'not_relevant' && (
+                  <button
+                    type="button"
+                    onClick={() => onStatusChange('not_relevant')}
+                    title="Mark as Not Relevant"
+                    className="px-1.5 py-0.5 rounded text-[10px] text-zinc-400 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/60 opacity-0 group-hover:opacity-100 transition"
+                  >
+                    🚫
+                  </button>
+                )}
+
+                {/* Remove button */}
                 <button
                   onClick={onDelete}
                   title="Remove listing"
-                  className="text-slate-600 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition"
+                  className="text-slate-600 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition p-0.5"
                 >
                   ✕
                 </button>
@@ -2647,10 +2847,10 @@
     }
 
     function KanbanView({ jobs, onQuickApply, onStatusChange, onInspect }) {
-      const columns = ['new', 'saved', 'applied', 'interviewing', 'offer', 'rejected'];
+      const columns = ['new', 'saved', 'applied', 'interviewing', 'offer', 'rejected', 'not_relevant'];
 
       return (
-        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 overflow-x-auto pb-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-7 gap-3 overflow-x-auto pb-6">
           {columns.map(col => {
             const conf = STATUS_CONFIG[col];
             const colJobs = jobs.filter(j => j.status === col);

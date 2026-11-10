@@ -386,11 +386,41 @@ def update_job_status(job_id: str, status: str, notes: Optional[str] = None) -> 
     conn.close()
     return affected
 
+def bulk_update_status(job_ids: List[str], status: str) -> int:
+    """
+    Updates status for multiple job IDs at once.
+    """
+    if not job_ids:
+        return 0
+    conn = get_connection()
+    cursor = conn.cursor()
+    placeholders = ",".join("?" for _ in job_ids)
+    cursor.execute(f"UPDATE jobs SET status = ? WHERE id IN ({placeholders})", [status] + job_ids)
+    affected = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return affected
+
 def delete_job(job_id: str) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
     affected = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return affected
+
+def bulk_delete_jobs(job_ids: List[str]) -> int:
+    """
+    Deletes multiple jobs by ID at once.
+    """
+    if not job_ids:
+        return 0
+    conn = get_connection()
+    cursor = conn.cursor()
+    placeholders = ",".join("?" for _ in job_ids)
+    cursor.execute(f"DELETE FROM jobs WHERE id IN ({placeholders})", job_ids)
+    affected = cursor.rowcount
     conn.commit()
     conn.close()
     return affected

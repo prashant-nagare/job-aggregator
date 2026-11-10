@@ -9,11 +9,11 @@ import os
 import asyncio
 from datetime import datetime
 
-from app.models import JobBase, JobUpdateStatus, ScrapeRequest, SchedulerConfig, AIConfig
+from app.models import JobBase, JobUpdateStatus, BulkStatusRequest, BulkDeleteRequest, ScrapeRequest, SchedulerConfig, AIConfig
 from app.database import (
     init_db, get_jobs, get_job_by_id, upsert_job, 
-    update_job_status, update_job_description, update_job_ai_analysis,
-    delete_job, get_stats, get_setting, set_setting
+    update_job_status, bulk_update_status, update_job_description, update_job_ai_analysis,
+    delete_job, bulk_delete_jobs, get_stats, get_setting, set_setting
 )
 from app.scrapers.aggregator import run_scraping_pipeline
 from app.scrapers.utils import fetch_job_detail, parse_experience
@@ -458,12 +458,22 @@ def change_status(job_id: str, body: JobUpdateStatus):
         raise HTTPException(status_code=404, detail="Job not found")
     return {"message": "Job status updated successfully", "id": job_id, "status": body.status}
 
+@app.post("/api/jobs/bulk-status")
+def change_status_bulk(body: BulkStatusRequest):
+    updated = bulk_update_status(body.job_ids, body.status)
+    return {"status": "success", "updated_count": updated, "new_status": body.status}
+
 @app.delete("/api/jobs/{job_id}")
 def remove_job(job_id: str):
     success = delete_job(job_id)
     if not success:
         raise HTTPException(status_code=404, detail="Job not found")
     return {"message": "Job deleted successfully", "id": job_id}
+
+@app.post("/api/jobs/bulk-delete")
+def remove_jobs_bulk(body: BulkDeleteRequest):
+    deleted = bulk_delete_jobs(body.job_ids)
+    return {"status": "success", "deleted_count": deleted}
 
 @app.post("/api/scrape")
 def trigger_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks):

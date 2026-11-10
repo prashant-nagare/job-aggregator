@@ -1,0 +1,1411 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JobScout Pro — Multi-Portal Job Aggregator & Tracker</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+              800: '#3730a3',
+              900: '#312e81',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <!-- React & ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen antialiased selection:bg-indigo-500 selection:text-white">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    const PORTAL_COLORS = {
+      linkedin: { bg: 'bg-blue-950/60', text: 'text-blue-400', border: 'border-blue-800/60', label: 'LinkedIn' },
+      instahyre: { bg: 'bg-purple-950/60', text: 'text-purple-400', border: 'border-purple-800/60', label: 'Instahyre' },
+      indeed: { bg: 'bg-indigo-950/60', text: 'text-indigo-400', border: 'border-indigo-800/60', label: 'Indeed' },
+      remoteok: { bg: 'bg-emerald-950/60', text: 'text-emerald-400', border: 'border-emerald-800/60', label: 'RemoteOK' },
+      glassdoor: { bg: 'bg-amber-950/60', text: 'text-amber-400', border: 'border-amber-800/60', label: 'Glassdoor' },
+      naukri: { bg: 'bg-rose-950/60', text: 'text-rose-400', border: 'border-rose-800/60', label: 'Naukri' },
+    };
+
+    const STATUS_CONFIG = {
+      new: { label: 'New', color: 'bg-slate-700/60 text-slate-300 border-slate-600', dot: 'bg-slate-400' },
+      saved: { label: 'Bookmarked', color: 'bg-amber-950/60 text-amber-300 border-amber-700/60', dot: 'bg-amber-400' },
+      applied: { label: 'Applied', color: 'bg-blue-950/60 text-blue-300 border-blue-700/60', dot: 'bg-blue-400' },
+      interviewing: { label: 'Interviewing', color: 'bg-purple-950/60 text-purple-300 border-purple-700/60', dot: 'bg-purple-400' },
+      offer: { label: 'Offer', color: 'bg-emerald-950/60 text-emerald-300 border-emerald-700/60', dot: 'bg-emerald-400' },
+      rejected: { label: 'Rejected', color: 'bg-red-950/60 text-red-300 border-red-700/60', dot: 'bg-red-400' },
+    };
+
+    const PRESET_ROLES = ["Python Developer", "Full Stack Developer", "Backend Engineer", "Frontend Developer", "DevOps Engineer", "Data Engineer"];
+    const COMMON_LOCATIONS = ["Bengaluru", "Hyderabad", "Pune", "Delhi NCR", "Mumbai", "Chennai", "Remote"];
+    const EXP_OPTIONS = [
+      { id: "0-1", label: "0-1 yrs (Fresher)" },
+      { id: "1-3", label: "1-3 yrs (Junior)" },
+      { id: "3-5", label: "3-5 yrs (Mid)" },
+      { id: "5-8", label: "5-8 yrs (Senior)" },
+      { id: "8+", label: "8+ yrs (Lead)" }
+    ];
+
+    function App() {
+      const [jobs, setJobs] = useState([]);
+      const [stats, setStats] = useState({ total: 0, by_status: {}, by_source: {} });
+      const [loading, setLoading] = useState(true);
+      const [scraping, setScraping] = useState(false);
+      const [scrapeMessage, setScrapeMessage] = useState(null);
+
+      // Filters & Search
+      const [searchQuery, setSearchQuery] = useState('');
+      const [selectedStatus, setSelectedStatus] = useState('all');
+      const [selectedPortal, setSelectedPortal] = useState('all');
+      const [remoteOnly, setRemoteOnly] = useState(false);
+      const [viewMode, setViewMode] = useState('feed'); // 'feed' | 'kanban'
+      const [filterDateRange, setFilterDateRange] = useState('any');
+      const [filterExpRange, setFilterExpRange] = useState('all');
+
+      // Scraper Form State (Auto-Remembered)
+      const [scrapeKeywords, setScrapeKeywords] = useState(["Python Developer"]);
+      const [newKeywordInput, setNewKeywordInput] = useState('');
+      const [scrapeLocations, setScrapeLocations] = useState(["Bengaluru"]);
+      const [openToAllIndia, setOpenToAllIndia] = useState(false);
+      const [newLocationInput, setNewLocationInput] = useState('');
+      const [scrapeDateRange, setScrapeDateRange] = useState('7d');
+      const [scrapeExpRanges, setScrapeExpRanges] = useState(["all"]);
+      const [scrapeCount, setScrapeCount] = useState(15);
+      const [scrapeSources, setScrapeSources] = useState(['linkedin', 'instahyre', 'indeed', 'remoteok', 'glassdoor']);
+      const [linkedinCookie, setLinkedinCookie] = useState('');
+      const [naukriCookie, setNaukriCookie] = useState('');
+      const [showCookieSettings, setShowCookieSettings] = useState(false);
+      const [showScraperPanel, setShowScraperPanel] = useState(false);
+
+      // Auto-Scraper Scheduler State (Every 2h)
+      const [autoScrapeEnabled, setAutoScrapeEnabled] = useState(false);
+      const [schedulerStatus, setSchedulerStatus] = useState({});
+      const [schedulerLoading, setSchedulerLoading] = useState(false);
+
+      // Drawer / Inspection
+      const [activeJob, setActiveJob] = useState(null);
+      const [notesText, setNotesText] = useState('');
+      const [detailLoading, setDetailLoading] = useState(false);
+
+      // Load data, saved config & scheduler on mount
+      useEffect(() => {
+        fetchJobs();
+        fetchStats();
+        loadSavedConfig();
+        fetchSchedulerStatus();
+
+        // Refresh scheduler status every 30 seconds
+        const timer = setInterval(() => {
+          fetchSchedulerStatus();
+        }, 30000);
+        return () => clearInterval(timer);
+      }, []);
+
+      const fetchJobs = async () => {
+        setLoading(true);
+        try {
+          const res = await fetch('/api/jobs?limit=300');
+          const data = await res.json();
+          setJobs(data.jobs || []);
+        } catch (err) {
+          console.error('Error fetching jobs:', err);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const fetchStats = async () => {
+        try {
+          const res = await fetch('/api/stats');
+          const data = await res.json();
+          setStats(data);
+        } catch (err) {
+          console.error('Error fetching stats:', err);
+        }
+      };
+
+      const loadSavedConfig = async () => {
+        try {
+          const res = await fetch('/api/config');
+          const data = await res.json();
+          const cfg = data.config;
+          if (cfg) {
+            if (cfg.keywords) {
+              setScrapeKeywords(Array.isArray(cfg.keywords) ? cfg.keywords : [cfg.keywords]);
+            }
+            if (cfg.locations) setScrapeLocations(cfg.locations);
+            if (cfg.open_to_all_india !== undefined) setOpenToAllIndia(cfg.open_to_all_india);
+            if (cfg.date_posted_range) setScrapeDateRange(cfg.date_posted_range);
+            if (cfg.exp_ranges) setScrapeExpRanges(cfg.exp_ranges);
+            if (cfg.sources) setScrapeSources(cfg.sources);
+            if (cfg.results_per_source) setScrapeCount(cfg.results_per_source);
+            if (cfg.linkedin_cookie) setLinkedinCookie(cfg.linkedin_cookie);
+            if (cfg.naukri_cookie) setNaukriCookie(cfg.naukri_cookie);
+          }
+        } catch (err) {
+          console.error('Error loading config:', err);
+        }
+      };
+
+      const fetchSchedulerStatus = async () => {
+        try {
+          const res = await fetch('/api/scheduler/status');
+          const data = await res.json();
+          setSchedulerStatus(data);
+          setAutoScrapeEnabled(Boolean(data.enabled));
+        } catch (err) {
+          console.error('Error fetching scheduler status:', err);
+        }
+      };
+
+      const toggleAutoScraper = async () => {
+        setSchedulerLoading(true);
+        const newTarget = !autoScrapeEnabled;
+        const currentConfig = {
+          keywords: scrapeKeywords,
+          locations: openToAllIndia ? ['India'] : scrapeLocations,
+          open_to_all_india: openToAllIndia,
+          date_posted_range: scrapeDateRange,
+          exp_ranges: scrapeExpRanges,
+          sources: scrapeSources,
+          results_per_source: parseInt(scrapeCount),
+          linkedin_cookie: linkedinCookie,
+          naukri_cookie: naukriCookie
+        };
+
+        try {
+          const res = await fetch('/api/scheduler/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              enabled: newTarget,
+              scraper_config: currentConfig
+            })
+          });
+          const data = await res.json();
+          if (res.ok) {
+            setAutoScrapeEnabled(newTarget);
+            setSchedulerStatus(data.scheduler);
+          }
+        } catch (err) {
+          console.error('Error toggling scheduler:', err);
+        } finally {
+          setSchedulerLoading(false);
+        }
+      };
+
+      const handleScrape = async (e) => {
+        e?.preventDefault();
+        setScraping(true);
+        setScrapeMessage({ type: 'info', text: 'Scraping target portals across roles & locations in parallel... (~5-15s)' });
+        try {
+          const payload = {
+            keywords: scrapeKeywords,
+            locations: openToAllIndia ? ['India'] : scrapeLocations,
+            open_to_all_india: openToAllIndia,
+            date_posted_range: scrapeDateRange,
+            exp_ranges: scrapeExpRanges,
+            sources: scrapeSources,
+            results_per_source: parseInt(scrapeCount),
+            linkedin_cookie: linkedinCookie,
+            naukri_cookie: naukriCookie
+          };
+
+          const res = await fetch('/api/scrape', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (res.ok) {
+            setScrapeMessage({ type: 'success', text: data.message });
+            fetchJobs();
+            fetchStats();
+            // Also update scheduler's saved config
+            fetchSchedulerStatus();
+          } else {
+            setScrapeMessage({ type: 'error', text: data.detail || 'Failed to scrape' });
+          }
+        } catch (err) {
+          setScrapeMessage({ type: 'error', text: 'Error connecting to scraper server.' });
+        } finally {
+          setScraping(false);
+        }
+      };
+
+      // Role Keywords Tag Helpers
+      const addRoleKeyword = (role) => {
+        const clean = role.trim();
+        if (clean && !scrapeKeywords.includes(clean)) {
+          setScrapeKeywords([...scrapeKeywords, clean]);
+        }
+      };
+
+      const removeRoleKeyword = (role) => {
+        if (scrapeKeywords.length > 1) {
+          setScrapeKeywords(scrapeKeywords.filter(k => k !== role));
+        }
+      };
+
+      const handleCustomRoleSubmit = (e) => {
+        if (e.key === 'Enter' || e.type === 'click') {
+          e.preventDefault();
+          if (newKeywordInput.trim()) {
+            addRoleKeyword(newKeywordInput);
+            setNewKeywordInput('');
+          }
+        }
+      };
+
+      // Experience Range Tag Helpers
+      const toggleExpRange = (expId) => {
+        if (expId === 'all') {
+          setScrapeExpRanges(['all']);
+          return;
+        }
+        let updated = scrapeExpRanges.filter(e => e !== 'all');
+        if (updated.includes(expId)) {
+          updated = updated.filter(e => e !== expId);
+        } else {
+          updated.push(expId);
+        }
+        if (updated.length === 0) updated = ['all'];
+        setScrapeExpRanges(updated);
+      };
+
+      // Location Tag Helpers
+      const toggleLocationTag = (loc) => {
+        if (openToAllIndia) setOpenToAllIndia(false);
+        setScrapeLocations(prev => 
+          prev.includes(loc) ? prev.filter(l => l !== loc) : [...prev, loc]
+        );
+      };
+
+      const addCustomLocation = (e) => {
+        if (e.key === 'Enter' && newLocationInput.trim()) {
+          e.preventDefault();
+          const clean = newLocationInput.trim();
+          if (!scrapeLocations.includes(clean)) {
+            setScrapeLocations([...scrapeLocations, clean]);
+          }
+          setNewLocationInput('');
+        }
+      };
+
+      const updateStatus = async (jobId, newStatus, customNotes = null) => {
+        try {
+          const current = jobs.find(j => j.id === jobId);
+          const body = {
+            status: newStatus,
+            notes: customNotes !== null ? customNotes : (current ? current.notes : '')
+          };
+          const res = await fetch(`/api/jobs/${jobId}/status`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          if (res.ok) {
+            setJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: newStatus, notes: body.notes } : j));
+            if (activeJob && activeJob.id === jobId) {
+              setActiveJob(prev => ({ ...prev, status: newStatus, notes: body.notes }));
+            }
+            fetchStats();
+          }
+        } catch (err) {
+          console.error('Error updating status:', err);
+        }
+      };
+
+      const loadJobDetails = async (job) => {
+        setActiveJob(job);
+        setNotesText(job.notes || '');
+
+        if (!job.has_full_description) {
+          setDetailLoading(true);
+          try {
+            const res = await fetch(`/api/jobs/${job.id}/details`);
+            const data = await res.json();
+            if (res.ok && data.description) {
+              setActiveJob(prev => prev && prev.id === job.id ? { ...prev, description: data.description, has_full_description: data.is_full } : prev);
+              setJobs(prev => prev.map(j => j.id === job.id ? { ...j, description: data.description, has_full_description: data.is_full } : j));
+            }
+          } catch (err) {
+            console.error('Error loading deep details:', err);
+          } finally {
+            setDetailLoading(false);
+          }
+        }
+      };
+
+      const deleteJob = async (jobId) => {
+        if (!confirm('Are you sure you want to remove this job listing?')) return;
+        try {
+          const res = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+          if (res.ok) {
+            setJobs(prev => prev.filter(j => j.id !== jobId));
+            if (activeJob && activeJob.id === jobId) setActiveJob(null);
+            fetchStats();
+          }
+        } catch (err) {
+          console.error('Error deleting job:', err);
+        }
+      };
+
+      const handleQuickApply = (job) => {
+        window.open(job.apply_url, '_blank');
+        if (job.status === 'new') {
+          updateStatus(job.id, 'applied');
+        }
+      };
+
+      // Filtered Jobs in frontend
+      const filteredJobs = useMemo(() => {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const dateCutoffs = {
+          '24h': 86400,
+          '3d': 259200,
+          '7d': 604800,
+          '14d': 1209600,
+          '30d': 2592000
+        };
+
+        return jobs.filter(job => {
+          if (selectedStatus !== 'all' && job.status !== selectedStatus) return false;
+          if (selectedPortal !== 'all' && job.source !== selectedPortal) return false;
+          if (remoteOnly && !job.is_remote) return false;
+
+          // Date Posted Filter
+          if (filterDateRange !== 'any' && dateCutoffs[filterDateRange]) {
+            const cutoff = nowSec - dateCutoffs[filterDateRange];
+            if (job.posted_timestamp && job.posted_timestamp < cutoff) return false;
+          }
+
+          // Experience Range Filter
+          if (filterExpRange !== 'all') {
+            const expRanges = {
+              '0-1': [0, 1],
+              '1-3': [1, 3],
+              '3-5': [3, 5],
+              '5-8': [5, 8],
+              '8+': [8, 99]
+            };
+            const [minReq, maxReq] = expRanges[filterExpRange] || [0, 99];
+            if (job.exp_min !== null && job.exp_min !== undefined) {
+              if (job.exp_min > maxReq) return false;
+            }
+            if (job.exp_max !== null && job.exp_max !== undefined) {
+              if (job.exp_max < minReq) return false;
+            }
+          }
+
+          // Search query
+          if (searchQuery.trim()) {
+            const q = searchQuery.toLowerCase();
+            const inTitle = job.title?.toLowerCase().includes(q);
+            const inCompany = job.company?.toLowerCase().includes(q);
+            const inLoc = job.location?.toLowerCase().includes(q);
+            const inSkills = job.skills?.some(s => s.toLowerCase().includes(q));
+            if (!inTitle && !inCompany && !inLoc && !inSkills) return false;
+          }
+
+          return true;
+        });
+      }, [jobs, selectedStatus, selectedPortal, remoteOnly, filterDateRange, filterExpRange, searchQuery]);
+
+      const toggleSource = (src) => {
+        setScrapeSources(prev => 
+          prev.includes(src) ? prev.filter(s => s !== src) : [...prev, src]
+        );
+      };
+
+      return (
+        <div className="flex flex-col min-h-screen bg-slate-950">
+          {/* Top Navbar */}
+          <header className="border-b border-slate-800 bg-slate-900/70 backdrop-blur sticky top-0 z-30">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 font-black text-xl text-white">
+                  ⚡
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-extrabold text-lg tracking-tight bg-gradient-to-r from-white via-slate-200 to-indigo-300 bg-clip-text text-transparent">
+                      JobScout Pro
+                    </span>
+                    <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                      Aggregator
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400">Scrape, aggregate & apply efficiently across all portals</p>
+                </div>
+              </div>
+
+              {/* Auto-Scrape Scheduler Badge & Toggle */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={toggleAutoScraper}
+                  disabled={schedulerLoading}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 border ${
+                    autoScrapeEnabled
+                      ? 'bg-emerald-950/60 border-emerald-500/80 text-emerald-300 shadow-md shadow-emerald-500/10'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                  title={autoScrapeEnabled ? `Auto-scraping every 2h. Next run: ${schedulerStatus.next_run || 'soon'}` : 'Click to enable automatic scraping every 2 hours'}
+                >
+                  <span className={`w-2 h-2 rounded-full ${autoScrapeEnabled ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`}></span>
+                  <span>{autoScrapeEnabled ? 'Auto-Scrape: ON (2h)' : 'Auto-Scrape: OFF'}</span>
+                </button>
+
+                <button
+                  onClick={() => setShowScraperPanel(!showScraperPanel)}
+                  className={`px-3.5 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-2 ${
+                    showScraperPanel 
+                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' 
+                      : 'bg-indigo-500/10 text-indigo-300 border border-indigo-500/30 hover:bg-indigo-500/20'
+                  }`}
+                >
+                  <span>🔍</span>
+                  <span>{showScraperPanel ? 'Close Scraper' : 'Scrape Portals'}</span>
+                </button>
+
+                <a
+                  href="/api/export"
+                  download="jobs_export.csv"
+                  className="hidden sm:flex px-3.5 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition items-center gap-1.5"
+                >
+                  <span>📥</span>
+                  <span>CSV</span>
+                </a>
+              </div>
+            </div>
+          </header>
+
+          {/* Scraper Control Hero Panel (Collapsible) */}
+          {showScraperPanel && (
+            <div className="border-b border-indigo-900/40 bg-gradient-to-b from-indigo-950/40 to-slate-900/60 p-4 sm:p-6 transition-all">
+              <div className="max-w-7xl mx-auto">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold uppercase tracking-wider text-indigo-300 flex items-center gap-2">
+                      <span>⚡</span> Multi-Portal Live Scraper Engine
+                    </h3>
+                    <span className="text-[11px] text-emerald-400 bg-emerald-950/50 border border-emerald-800/60 px-2 py-0.5 rounded-full">
+                      ✓ Inputs Auto-Saved
+                    </span>
+                  </div>
+
+                  {/* Auto-Scrape Status Banner */}
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-slate-400">Scheduled Runs:</span>
+                    <button
+                      type="button"
+                      onClick={toggleAutoScraper}
+                      className={`font-semibold px-2 py-0.5 rounded border transition ${
+                        autoScrapeEnabled
+                          ? 'bg-emerald-900/50 text-emerald-300 border-emerald-700'
+                          : 'bg-slate-800 text-slate-400 border-slate-700'
+                      }`}
+                    >
+                      {autoScrapeEnabled ? 'Active (Every 2h)' : 'Disabled'}
+                    </button>
+                    {schedulerStatus.next_run && autoScrapeEnabled && (
+                      <span className="text-[11px] text-slate-400">
+                        (Next: {new Date(schedulerStatus.next_run).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <form onSubmit={handleScrape} className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  {/* Job Role Keywords with + button & Chips */}
+                  <div className="md:col-span-4 p-3 rounded-xl bg-slate-900/70 border border-slate-800">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-semibold text-slate-300 flex items-center gap-2">
+                        <span>🎯 Job Roles / Keywords:</span>
+                        <span className="text-[11px] text-slate-400 font-normal">Add multiple roles using the + buttons</span>
+                      </label>
+                      <span className="text-[11px] text-slate-500">{scrapeKeywords.length} active role(s)</span>
+                    </div>
+
+                    {/* Active Selected Roles */}
+                    <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
+                      {scrapeKeywords.map((role) => (
+                        <span
+                          key={role}
+                          className="px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-600 text-white flex items-center gap-1.5 shadow-sm"
+                        >
+                          <span>{role}</span>
+                          {scrapeKeywords.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => removeRoleKeyword(role)}
+                              className="text-indigo-200 hover:text-white font-black text-[11px]"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </span>
+                      ))}
+
+                      {/* Custom Role Input with + button */}
+                      <div className="inline-flex items-center gap-1">
+                        <input
+                          type="text"
+                          value={newKeywordInput}
+                          onChange={(e) => setNewKeywordInput(e.target.value)}
+                          onKeyDown={handleCustomRoleSubmit}
+                          placeholder="+ Custom role (e.g. React Native)"
+                          className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 min-w-[200px]"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleCustomRoleSubmit}
+                          className="px-2 py-1 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs font-bold transition"
+                        >
+                          + Add
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Quick Preset Role Suggestions */}
+                    <div className="flex flex-wrap items-center gap-1 pt-2 border-t border-slate-800/60">
+                      <span className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold mr-1">Suggestions:</span>
+                      {PRESET_ROLES.map(role => {
+                        const isAdded = scrapeKeywords.includes(role);
+                        return (
+                          <button
+                            key={role}
+                            type="button"
+                            onClick={() => addRoleKeyword(role)}
+                            disabled={isAdded}
+                            className={`px-2 py-0.5 rounded text-[11px] font-medium border transition ${
+                              isAdded
+                                ? 'bg-slate-800/40 text-slate-600 border-slate-800 cursor-default'
+                                : 'bg-slate-800/80 text-slate-300 border-slate-700 hover:text-white hover:bg-slate-700'
+                            }`}
+                          >
+                            + {role}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Multi-Location Selection Area */}
+                  <div className="md:col-span-4 p-3 rounded-xl bg-slate-900/70 border border-slate-800">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+                      <label className="text-xs font-semibold text-slate-300 flex items-center gap-2">
+                        <span>📍 Target Locations:</span>
+                        <span className="text-[11px] text-slate-400 font-normal">Choose one or more cities, or select Open to All</span>
+                      </label>
+
+                      {/* Open to All India Toggle */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenToAllIndia(!openToAllIndia);
+                          if (!openToAllIndia) setScrapeLocations([]);
+                        }}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                          openToAllIndia
+                            ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 ring-1 ring-emerald-400'
+                            : 'bg-slate-800 text-slate-400 hover:text-white border border-slate-700'
+                        }`}
+                      >
+                        <span>🇮🇳</span>
+                        <span>Open to All (India)</span>
+                      </button>
+                    </div>
+
+                    {!openToAllIndia && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {COMMON_LOCATIONS.map(loc => {
+                          const active = scrapeLocations.includes(loc);
+                          return (
+                            <button
+                              key={loc}
+                              type="button"
+                              onClick={() => toggleLocationTag(loc)}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                                active
+                                  ? 'bg-indigo-600 border-indigo-500 text-white shadow-sm'
+                                  : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-slate-200'
+                              }`}
+                            >
+                              <span>{active ? '✓ ' : '+ '}</span>
+                              <span>{loc}</span>
+                            </button>
+                          );
+                        })}
+
+                        {/* Custom city input */}
+                        <input
+                          type="text"
+                          value={newLocationInput}
+                          onChange={(e) => setNewLocationInput(e.target.value)}
+                          onKeyDown={addCustomLocation}
+                          placeholder="+ Custom city (Enter)"
+                          className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 min-w-[150px]"
+                        />
+                      </div>
+                    )}
+
+                    {openToAllIndia && (
+                      <div className="text-xs text-emerald-400 bg-emerald-950/40 border border-emerald-800/50 rounded-lg px-3 py-1.5 mt-1">
+                        ✓ Scraper will search all jobs available throughout India without restricting to any specific city.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Multi-Experience Range with + Buttons */}
+                  <div className="md:col-span-2 p-3 rounded-xl bg-slate-900/70 border border-slate-800">
+                    <label className="block text-xs font-semibold text-slate-300 mb-2">
+                      🎓 Experience Range: (Select one or multiple)
+                    </label>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => toggleExpRange('all')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                          scrapeExpRanges.includes('all')
+                            ? 'bg-indigo-600 border-indigo-500 text-white font-bold'
+                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        All Experience
+                      </button>
+                      {EXP_OPTIONS.map(exp => {
+                        const active = scrapeExpRanges.includes(exp.id);
+                        return (
+                          <button
+                            key={exp.id}
+                            type="button"
+                            onClick={() => toggleExpRange(exp.id)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                              active
+                                ? 'bg-indigo-600 border-indigo-500 text-white font-bold'
+                                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            <span>{active ? '✓ ' : '+ '}</span>
+                            <span>{exp.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Date Posted Range */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                      📅 Date Posted Range
+                    </label>
+                    <select
+                      value={scrapeDateRange}
+                      onChange={(e) => setScrapeDateRange(e.target.value)}
+                      className="w-full bg-slate-900/90 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="any">Any time</option>
+                      <option value="24h">Last 24 Hours</option>
+                      <option value="3d">Last 3 Days</option>
+                      <option value="7d">Last 7 Days (Past Week)</option>
+                      <option value="14d">Last 14 Days (2 Weeks)</option>
+                      <option value="30d">Last 30 Days (Past Month)</option>
+                    </select>
+                  </div>
+
+                  {/* Results Count & Submit */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">Results per Portal</label>
+                    <select
+                      value={scrapeCount}
+                      onChange={(e) => setScrapeCount(e.target.value)}
+                      className="w-full bg-slate-900/90 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 mb-2"
+                    >
+                      <option value="5">5 jobs / portal (Fastest)</option>
+                      <option value="15">15 jobs / portal (Recommended)</option>
+                      <option value="30">30 jobs / portal (Deep)</option>
+                    </select>
+
+                    <button
+                      type="submit"
+                      disabled={scraping || scrapeSources.length === 0}
+                      className="w-full h-[38px] bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold text-xs rounded-lg shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 transition"
+                    >
+                      {scraping ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                          <span>Scraping Portals...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>🚀</span>
+                          <span>Start Live Scrape</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Target Portals Selection */}
+                  <div className="md:col-span-4 mt-1">
+                    <label className="block text-xs font-medium text-slate-400 mb-2">Select Target Portals:</label>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { id: 'linkedin', label: 'LinkedIn', color: 'border-blue-500/40 text-blue-400', desc: 'Direct guest search' },
+                        { id: 'instahyre', label: 'Instahyre', color: 'border-purple-500/40 text-purple-400', desc: 'Top India Tech' },
+                        { id: 'indeed', label: 'Indeed', color: 'border-indigo-500/40 text-indigo-400', desc: 'Global & India' },
+                        { id: 'remoteok', label: 'RemoteOK', color: 'border-emerald-500/40 text-emerald-400', desc: 'Worldwide Remote' },
+                        { id: 'glassdoor', label: 'Glassdoor', color: 'border-amber-500/40 text-amber-400', desc: 'Tech & Reviews' },
+                        { id: 'naukri', label: 'Naukri', color: 'border-rose-500/40 text-rose-400', desc: 'Needs dummy cookie' },
+                      ].map(portal => {
+                        const checked = scrapeSources.includes(portal.id);
+                        return (
+                          <button
+                            type="button"
+                            key={portal.id}
+                            onClick={() => toggleSource(portal.id)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition flex items-center gap-2 ${
+                              checked
+                                ? `bg-slate-800 ${portal.color} border-current ring-1 ring-current`
+                                : 'bg-slate-900/60 border-slate-800 text-slate-500 hover:text-slate-400'
+                            }`}
+                          >
+                            <span>{checked ? '✓' : '○'}</span>
+                            <span className="font-semibold">{portal.label}</span>
+                            <span className="text-[10px] opacity-70">({portal.desc})</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Dummy Account & Cookie Accordion */}
+                    <div className="mt-3 pt-3 border-t border-slate-800/80">
+                      <button
+                        type="button"
+                        onClick={() => setShowCookieSettings(!showCookieSettings)}
+                        className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1.5"
+                      >
+                        <span>{showCookieSettings ? '▼' : '►'}</span>
+                        <span>Dummy Account & Session Cookies (Optional for extra listings)</span>
+                      </button>
+
+                      {showCookieSettings && (
+                        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 p-3 rounded-xl bg-slate-950/80 border border-slate-800">
+                          <div>
+                            <label className="block text-[11px] font-medium text-blue-300 mb-1">
+                              LinkedIn 'li_at' Cookie (From dummy account to bypass rate limits)
+                            </label>
+                            <input
+                              type="password"
+                              value={linkedinCookie}
+                              onChange={(e) => setLinkedinCookie(e.target.value)}
+                              placeholder="AQEDAT... (Paste your li_at cookie value)"
+                              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                            />
+                            <p className="text-[10px] text-slate-500 mt-0.5">Found in Browser DevTools → Application → Cookies → linkedin.com → li_at</p>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-medium text-rose-300 mb-1">
+                              Naukri Cookie Header (From logged-in session)
+                            </label>
+                            <input
+                              type="password"
+                              value={naukriCookie}
+                              onChange={(e) => setNaukriCookie(e.target.value)}
+                              placeholder="nauk_... or full cookie string"
+                              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                            />
+                            <p className="text-[10px] text-slate-500 mt-0.5">Allows scraping Naukri search without Akamai 406 captcha check</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </form>
+
+                {scrapeMessage && (
+                  <div className={`mt-4 p-3 rounded-lg text-xs flex items-center justify-between border ${
+                    scrapeMessage.type === 'error'
+                      ? 'bg-rose-950/40 border-rose-800/60 text-rose-300'
+                      : scrapeMessage.type === 'success'
+                      ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300'
+                      : 'bg-indigo-950/40 border-indigo-800/60 text-indigo-300'
+                  }`}>
+                    <span>{scrapeMessage.text}</span>
+                    <button onClick={() => setScrapeMessage(null)} className="text-slate-400 hover:text-white">✕</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Main Content Area */}
+          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            {/* Filter & Toolbar */}
+            <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 mb-6">
+              {/* Search Box */}
+              <div className="relative flex-1 max-w-sm">
+                <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                  🔎
+                </span>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Filter by title, company, or skills..."
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                />
+                {searchQuery && (
+                  <button onClick={() => setSearchQuery('')} className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-white text-xs">
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {/* Toolbar Dropdowns */}
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Date Posted Filter */}
+                <select
+                  value={filterDateRange}
+                  onChange={(e) => setFilterDateRange(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  title="Filter by posted date range"
+                >
+                  <option value="any">📅 Posted: Any time</option>
+                  <option value="24h">📅 Last 24 Hours</option>
+                  <option value="3d">📅 Last 3 Days</option>
+                  <option value="7d">📅 Last 7 Days</option>
+                  <option value="14d">📅 Last 14 Days</option>
+                  <option value="30d">📅 Last 30 Days</option>
+                </select>
+
+                {/* Experience Filter */}
+                <select
+                  value={filterExpRange}
+                  onChange={(e) => setFilterExpRange(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  title="Filter by experience range"
+                >
+                  <option value="all">🎓 Exp: All Levels</option>
+                  <option value="0-1">🎓 0-1 yrs (Fresher)</option>
+                  <option value="1-3">🎓 1-3 yrs (Junior)</option>
+                  <option value="3-5">🎓 3-5 yrs (Mid)</option>
+                  <option value="5-8">🎓 5-8 yrs (Senior)</option>
+                  <option value="8+">🎓 8+ yrs (Lead)</option>
+                </select>
+
+                {/* Portal filter */}
+                <select
+                  value={selectedPortal}
+                  onChange={(e) => setSelectedPortal(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="all">All Portals</option>
+                  <option value="linkedin">LinkedIn</option>
+                  <option value="instahyre">Instahyre</option>
+                  <option value="indeed">Indeed</option>
+                  <option value="remoteok">RemoteOK</option>
+                  <option value="glassdoor">Glassdoor</option>
+                  <option value="naukri">Naukri</option>
+                </select>
+
+                {/* Remote Only */}
+                <button
+                  onClick={() => setRemoteOnly(!remoteOnly)}
+                  className={`px-3 py-2 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 ${
+                    remoteOnly 
+                      ? 'bg-emerald-950/60 border-emerald-600 text-emerald-300 ring-1 ring-emerald-500'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <span>🌐</span>
+                  <span>Remote</span>
+                </button>
+
+                {/* View switcher */}
+                <div className="flex items-center bg-slate-900 border border-slate-800 rounded-xl p-1">
+                  <button
+                    onClick={() => setViewMode('feed')}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-lg transition ${
+                      viewMode === 'feed' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Feed
+                  </button>
+                  <button
+                    onClick={() => setViewMode('kanban')}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-lg transition ${
+                      viewMode === 'kanban' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Kanban
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Status Pills Tab Bar */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-3 mb-6 border-b border-slate-800/80">
+              <button
+                onClick={() => setSelectedStatus('all')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap ${
+                  selectedStatus === 'all'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-slate-900/80 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                All Jobs ({jobs.length})
+              </button>
+              {Object.keys(STATUS_CONFIG).map(st => {
+                const count = stats.by_status?.[st] || 0;
+                const active = selectedStatus === st;
+                return (
+                  <button
+                    key={st}
+                    onClick={() => setSelectedStatus(st)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 whitespace-nowrap ${
+                      active
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-slate-900/80 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    }`}
+                  >
+                    <span className={`w-2 h-2 rounded-full ${STATUS_CONFIG[st].dot}`}></span>
+                    <span>{STATUS_CONFIG[st].label}</span>
+                    <span className="text-[10px] opacity-75">({count})</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Loading Indicator */}
+            {loading ? (
+              <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                <div className="w-8 h-8 border-3 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin mb-3"></div>
+                <p className="text-sm">Loading jobs database...</p>
+              </div>
+            ) : filteredJobs.length === 0 ? (
+              <div className="text-center py-20 border border-dashed border-slate-800 rounded-2xl p-8">
+                <div className="text-4xl mb-3">🔍</div>
+                <h4 className="text-base font-bold text-white mb-1">No jobs match your current filter</h4>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto mb-4">
+                  Try adjusting the date range, experience level, or trigger a fresh scrape.
+                </p>
+                <button
+                  onClick={() => setShowScraperPanel(true)}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow"
+                >
+                  Open Live Scraper
+                </button>
+              </div>
+            ) : viewMode === 'feed' ? (
+              /* Feed View */
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredJobs.map(job => (
+                  <JobCard
+                    key={job.id}
+                    job={job}
+                    onQuickApply={() => handleQuickApply(job)}
+                    onStatusChange={(status) => updateStatus(job.id, status)}
+                    onInspect={() => loadJobDetails(job)}
+                    onDelete={() => deleteJob(job.id)}
+                  />
+                ))}
+              </div>
+            ) : (
+              /* Kanban Pipeline View */
+              <KanbanView
+                jobs={filteredJobs}
+                onQuickApply={handleQuickApply}
+                onStatusChange={updateStatus}
+                onInspect={loadJobDetails}
+              />
+            )}
+          </main>
+
+          {/* Job Inspection / Full Details Drawer */}
+          {activeJob && (
+            <div className="fixed inset-0 z-50 overflow-hidden flex justify-end bg-black/60 backdrop-blur-sm transition-opacity">
+              <div className="w-full max-w-xl bg-slate-900 border-l border-slate-800 h-full flex flex-col shadow-2xl p-6 overflow-y-auto">
+                {/* Header */}
+                <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2.5 py-1 text-xs font-bold rounded-lg border uppercase tracking-wider ${
+                      PORTAL_COLORS[activeJob.source]?.bg || 'bg-slate-800'
+                    } ${PORTAL_COLORS[activeJob.source]?.text || 'text-slate-300'} ${PORTAL_COLORS[activeJob.source]?.border || 'border-slate-700'}`}>
+                      {PORTAL_COLORS[activeJob.source]?.label || activeJob.source}
+                    </span>
+                    {activeJob.has_full_description && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950/60 text-emerald-400 border border-emerald-800/60">
+                        ⚡ Full Description Scraped
+                      </span>
+                    )}
+                  </div>
+                  <button onClick={() => setActiveJob(null)} className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 text-lg">
+                    ✕
+                  </button>
+                </div>
+
+                <div className="mt-4 flex-1">
+                  <h2 className="text-xl font-bold text-white leading-tight mb-1">{activeJob.title}</h2>
+                  <p className="text-sm font-semibold text-indigo-400 mb-3">{activeJob.company}</p>
+
+                  {/* Metadata Chips */}
+                  <div className="flex flex-wrap gap-2 mb-4 text-xs">
+                    <span className="px-2.5 py-1 rounded bg-slate-800 text-slate-300">
+                      📍 {activeJob.location}
+                    </span>
+                    {activeJob.is_remote && (
+                      <span className="px-2.5 py-1 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 font-semibold">
+                        🌐 Remote Friendly
+                      </span>
+                    )}
+                    {activeJob.experience && (
+                      <span className="px-2.5 py-1 rounded bg-indigo-950/60 text-indigo-300 border border-indigo-800/60 font-semibold">
+                        🎓 {activeJob.experience}
+                      </span>
+                    )}
+                    {activeJob.salary && (
+                      <span className="px-2.5 py-1 rounded bg-amber-950/60 text-amber-300 border border-amber-800/60 font-semibold">
+                        💰 {activeJob.salary}
+                      </span>
+                    )}
+                    <span className="px-2.5 py-1 rounded bg-slate-800/80 text-slate-400">
+                      🕒 Posted {activeJob.posted_date}
+                    </span>
+                  </div>
+
+                  {/* Quick Action Button */}
+                  <div className="flex gap-2 mb-6">
+                    <button
+                      onClick={() => handleQuickApply(activeJob)}
+                      className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-1.5 transition"
+                    >
+                      <span>🚀 Apply on {PORTAL_COLORS[activeJob.source]?.label || 'Portal'}</span>
+                      <span>↗</span>
+                    </button>
+                  </div>
+
+                  {/* Status Selector */}
+                  <div className="mb-6 p-4 rounded-xl bg-slate-950/60 border border-slate-800">
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
+                      Application Stage
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {Object.keys(STATUS_CONFIG).map(st => {
+                        const isCurrent = activeJob.status === st;
+                        return (
+                          <button
+                            key={st}
+                            onClick={() => updateStatus(activeJob.id, st)}
+                            className={`py-2 px-1 text-xs font-semibold rounded-lg border transition text-center ${
+                              isCurrent
+                                ? `${STATUS_CONFIG[st].color} border-current ring-1 ring-current`
+                                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            {STATUS_CONFIG[st].label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Application Notes */}
+                  <div className="mb-6">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                        My Notes & Follow-up
+                      </label>
+                      <button
+                        onClick={() => updateStatus(activeJob.id, activeJob.status, notesText)}
+                        className="text-xs font-semibold text-indigo-400 hover:text-indigo-300"
+                      >
+                        Save Notes
+                      </button>
+                    </div>
+                    <textarea
+                      value={notesText}
+                      onChange={(e) => setNotesText(e.target.value)}
+                      placeholder="Add notes: Referral contacts, date applied, salary discussed, interview dates..."
+                      rows="3"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                    ></textarea>
+                  </div>
+
+                  {/* Skills */}
+                  {activeJob.skills && activeJob.skills.length > 0 && (
+                    <div className="mb-6">
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
+                        Key Skills & Tech Stack
+                      </label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {activeJob.skills.map((s, idx) => (
+                          <span key={idx} className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 text-xs border border-slate-700">
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Full Job Description Scraped from Detail Page */}
+                  <div className="mb-6">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+                        <span>Job Description</span>
+                        {detailLoading && (
+                          <span className="text-[10px] text-indigo-400 animate-pulse font-normal">
+                            Scraping full listing details...
+                          </span>
+                        )}
+                      </label>
+                      <button
+                        onClick={() => {
+                          setDetailLoading(true);
+                          fetch(`/api/jobs/${activeJob.id}/details`)
+                            .then(r => r.json())
+                            .then(data => {
+                              if (data.description) {
+                                setActiveJob(prev => ({ ...prev, description: data.description, has_full_description: data.is_full }));
+                              }
+                            })
+                            .finally(() => setDetailLoading(false));
+                        }}
+                        className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1"
+                        title="Re-scrape complete description from portal"
+                      >
+                        <span>🔄</span>
+                        <span>Re-fetch Details</span>
+                      </button>
+                    </div>
+
+                    <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 text-xs text-slate-300 whitespace-pre-line leading-relaxed max-h-96 overflow-y-auto">
+                      {detailLoading ? (
+                        <div className="py-8 flex flex-col items-center justify-center text-slate-500">
+                          <div className="w-5 h-5 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin mb-2"></div>
+                          <span>Scraping full job detail page...</span>
+                        </div>
+                      ) : (
+                        activeJob.description || 'No detailed description provided by portal.'
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function JobCard({ job, onQuickApply, onStatusChange, onInspect, onDelete }) {
+      const portal = PORTAL_COLORS[job.source] || { bg: 'bg-slate-800', text: 'text-slate-400', border: 'border-slate-700', label: job.source };
+      const statusConf = STATUS_CONFIG[job.status] || STATUS_CONFIG.new;
+
+      return (
+        <div className="bg-slate-900/90 border border-slate-800/80 hover:border-slate-700 rounded-2xl p-5 flex flex-col justify-between transition-all duration-200 hover:shadow-xl hover:shadow-indigo-500/5 group">
+          <div>
+            {/* Top row: Portal badge & status dot */}
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${portal.bg} ${portal.text} ${portal.border}`}>
+                {portal.label}
+              </span>
+              <div className="flex items-center gap-2">
+                <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border ${statusConf.color}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${statusConf.dot}`}></span>
+                  <span>{statusConf.label}</span>
+                </span>
+                <button
+                  onClick={onDelete}
+                  title="Remove listing"
+                  className="text-slate-600 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Title & Company */}
+            <h3
+              onClick={onInspect}
+              className="font-bold text-base text-white group-hover:text-indigo-400 cursor-pointer transition line-clamp-1 mb-1"
+            >
+              {job.title}
+            </h3>
+            <p className="text-xs font-medium text-slate-400 mb-3 line-clamp-1">{job.company}</p>
+
+            {/* Metadata badges: Location, Remote, Experience, Salary */}
+            <div className="flex flex-wrap items-center gap-1.5 mb-3 text-[11px] text-slate-300">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800/70 border border-slate-700/60">
+                📍 {job.location}
+              </span>
+              {job.is_remote && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-950/40 border border-emerald-800/50 text-emerald-400 font-semibold">
+                  🌐 Remote
+                </span>
+              )}
+              {job.experience && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-950/40 border border-indigo-800/50 text-indigo-300 font-semibold">
+                  🎓 {job.experience}
+                </span>
+              )}
+              {job.salary && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-950/40 border border-amber-800/50 text-amber-300 font-semibold">
+                  💰 {job.salary}
+                </span>
+              )}
+            </div>
+
+            {/* Skills */}
+            {job.skills && job.skills.length > 0 && (
+              <div className="flex flex-wrap gap-1 mb-4">
+                {job.skills.slice(0, 4).map((s, idx) => (
+                  <span key={idx} className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                    {s}
+                  </span>
+                ))}
+                {job.skills.length > 4 && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800/40 text-slate-500">
+                    +{job.skills.length - 4}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Action Footer */}
+          <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
+            <button
+              onClick={onInspect}
+              className="text-xs font-semibold text-slate-400 hover:text-white transition flex items-center gap-1"
+            >
+              <span>Details & Notes</span>
+              {job.has_full_description && <span className="text-[10px] text-emerald-400">⚡</span>}
+              <span>→</span>
+            </button>
+            <button
+              onClick={onQuickApply}
+              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl shadow-md shadow-indigo-600/20 flex items-center gap-1.5 transition active:scale-95"
+            >
+              <span>Apply</span>
+              <span>↗</span>
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    function KanbanView({ jobs, onQuickApply, onStatusChange, onInspect }) {
+      const columns = ['new', 'saved', 'applied', 'interviewing', 'offer', 'rejected'];
+
+      return (
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 overflow-x-auto pb-6">
+          {columns.map(col => {
+            const conf = STATUS_CONFIG[col];
+            const colJobs = jobs.filter(j => j.status === col);
+            return (
+              <div key={col} className="bg-slate-900/60 border border-slate-800 rounded-2xl p-3 flex flex-col min-w-[240px]">
+                {/* Column Header */}
+                <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${conf.dot}`}></span>
+                    <h4 className="text-xs font-bold text-slate-200">{conf.label}</h4>
+                  </div>
+                  <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">
+                    {colJobs.length}
+                  </span>
+                </div>
+
+                {/* Cards */}
+                <div className="flex flex-col gap-2.5 flex-1">
+                  {colJobs.map(j => (
+                    <div
+                      key={j.id}
+                      onClick={() => onInspect(j)}
+                      className="bg-slate-900 border border-slate-800 hover:border-indigo-500/50 rounded-xl p-3 cursor-pointer transition shadow-sm group"
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">
+                          {j.source}
+                        </span>
+                        <span className="text-[10px] text-slate-500">{j.posted_date || ''}</span>
+                      </div>
+                      <h5 className="text-xs font-bold text-white group-hover:text-indigo-300 line-clamp-1 mb-0.5">
+                        {j.title}
+                      </h5>
+                      <p className="text-[11px] text-slate-400 line-clamp-1 mb-2">{j.company}</p>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-800/60">
+                        <span className="text-[10px] text-slate-500">📍 {j.location.split(',')[0]}</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onQuickApply(j);
+                          }}
+                          className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[10px] rounded transition"
+                        >
+                          Apply ↗
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {colJobs.length === 0 && (
+                    <div className="text-center py-8 text-[11px] text-slate-600 border border-dashed border-slate-800/80 rounded-xl">
+                      Empty
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

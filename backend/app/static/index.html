@@ -132,6 +132,7 @@
       const [evaluatingAll, setEvaluatingAll] = useState(false);
       const [uploadingResume, setUploadingResume] = useState(false);
       const [resumeUploadError, setResumeUploadError] = useState(null);
+      const [resumeAnalysisMethod, setResumeAnalysisMethod] = useState('ai');
 
       // AI Settings Form
       const [aiProviderInput, setAiProviderInput] = useState('gemini');
@@ -220,6 +221,9 @@
           const res = await fetch('/api/resume');
           const data = await res.json();
           setResumeData(data);
+          if (data.has_resume && data.parse_method) {
+            setResumeAnalysisMethod(data.parse_method);
+          }
         } catch (err) {
           console.error('Error fetching resume info:', err);
         }
@@ -273,6 +277,7 @@
         setResumeUploadError(null);
         const formData = new FormData();
         formData.append('file', file);
+        formData.append('parse_method', resumeAnalysisMethod);
 
         try {
           const res = await fetch('/api/resume/upload', {
@@ -293,19 +298,43 @@
         }
       };
 
-      const handleEvaluateAll = async () => {
+      const handleReparseResume = async (method) => {
+        setUploadingResume(true);
+        setResumeUploadError(null);
+        try {
+          const res = await fetch('/api/resume/reparse', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ parse_method: method })
+          });
+          const data = await res.json();
+          if (res.ok) {
+            setResumeAnalysisMethod(method);
+            fetchResumeInfo();
+            fetchJobs();
+          } else {
+            setResumeUploadError(data.detail || 'Failed to re-analyze resume.');
+          }
+        } catch (err) {
+          setResumeUploadError('Error re-analyzing resume.');
+        } finally {
+          setUploadingResume(false);
+        }
+      };
+
+      const handleEvaluateAll = async (method = 'auto') => {
         setEvaluatingAll(true);
         try {
-          const res = await fetch('/api/jobs/evaluate-all', { method: 'POST' });
+          const res = await fetch(`/api/jobs/evaluate-all?method=${method}`, { method: 'POST' });
           if (res.ok) {
             // Poll jobs to show live updates
-            setTimeout(fetchJobs, 2500);
-            setTimeout(fetchJobs, 6000);
+            setTimeout(fetchJobs, 2000);
+            setTimeout(fetchJobs, 5000);
           }
         } catch (err) {
           console.error('Error evaluating all:', err);
         } finally {
-          setTimeout(() => setEvaluatingAll(false), 3000);
+          setTimeout(() => setEvaluatingAll(false), 2500);
         }
       };
 
@@ -1274,6 +1303,49 @@
                 </div>
 
                 <div className="mt-4">
+                  {/* Parsing Method Selector Toggle */}
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                        Analysis Method
+                      </label>
+                      <span className="text-[10px] text-slate-500 font-medium">
+                        {resumeAnalysisMethod === 'ai' ? '🤖 Deep LLM Analysis' : '⚡ 100% Offline & Private'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setResumeAnalysisMethod('ai')}
+                        className={`py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 border ${
+                          resumeAnalysisMethod === 'ai'
+                            ? 'bg-indigo-600 border-indigo-500 text-white shadow-md shadow-indigo-600/30'
+                            : 'bg-transparent border-transparent text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <span>🤖</span>
+                        <span>AI Analysis</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setResumeAnalysisMethod('offline')}
+                        className={`py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 border ${
+                          resumeAnalysisMethod === 'offline'
+                            ? 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-600/30'
+                            : 'bg-transparent border-transparent text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <span>⚡</span>
+                        <span>Offline Method</span>
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1.5 px-1">
+                      {resumeAnalysisMethod === 'ai'
+                        ? '• Deep semantic extraction of experience, skills & executive summary using Gemini / OpenAI LLM.'
+                        : '• Instant offline regex & keyword matching. Runs locally with 0 API calls and zero data shared.'}
+                    </p>
+                  </div>
+
                   {/* Upload Box */}
                   <div className="border-2 border-dashed border-slate-700 hover:border-indigo-500 rounded-2xl p-6 text-center transition cursor-pointer relative bg-slate-950/60 mb-4">
                     <input
@@ -1284,7 +1356,9 @@
                     />
                     <div className="text-3xl mb-2">📤</div>
                     <p className="text-xs font-bold text-white mb-1">
-                      {uploadingResume ? 'Extracting & Analyzing Resume...' : 'Click or Drag & Drop Resume PDF'}
+                      {uploadingResume 
+                        ? `Extracting & Analyzing Resume (${resumeAnalysisMethod === 'ai' ? 'AI' : 'Offline'})...` 
+                        : `Click or Drag & Drop Resume PDF (${resumeAnalysisMethod === 'ai' ? 'AI Mode' : 'Offline Mode'})`}
                     </p>
                     <p className="text-[11px] text-slate-400">PDF files up to 10MB supported</p>
                   </div>
@@ -1298,11 +1372,20 @@
                   {/* Active Resume Details */}
                   {resumeData.has_resume && resumeData.profile && (
                     <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 mb-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
-                          <span>✓ Active Resume:</span>
-                          <span className="text-white font-medium">{resumeData.filename}</span>
-                        </span>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
+                            <span>✓ Active:</span>
+                            <span className="text-white font-medium">{resumeData.filename}</span>
+                          </span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                            (resumeData.parse_method || 'ai') === 'offline'
+                              ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-300'
+                              : 'bg-indigo-950/80 border-indigo-500/60 text-indigo-300'
+                          }`}>
+                            {(resumeData.parse_method || 'ai') === 'offline' ? '⚡ Offline Method' : '🤖 AI Analyzed'}
+                          </span>
+                        </div>
                         <button onClick={handleDeleteResume} className="text-xs text-rose-400 hover:text-rose-300">
                           Remove
                         </button>
@@ -1315,7 +1398,7 @@
                             <span className="text-indigo-300 font-bold">{resumeData.profile.target_title}</span>
                           </div>
                         )}
-                        {resumeData.profile.years_of_experience && (
+                        {resumeData.profile.years_of_experience !== undefined && (
                           <div>
                             <span className="text-slate-500 font-semibold">Experience: </span>
                             <span>~{resumeData.profile.years_of_experience} years</span>
@@ -1339,21 +1422,70 @@
                           </div>
                         )}
                       </div>
+
+                      {/* Reparse Quick Switcher */}
+                      <div className="mt-3 pt-3 border-t border-slate-800/80 flex items-center justify-between">
+                        <span className="text-[11px] text-slate-400 font-medium">Switch parsed analysis:</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleReparseResume('ai')}
+                            disabled={uploadingResume}
+                            className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg border transition flex items-center gap-1 ${
+                              (resumeData.parse_method || 'ai') === 'ai'
+                                ? 'bg-indigo-950 border-indigo-500 text-indigo-300'
+                                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            <span>🤖</span>
+                            <span>AI LLM</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleReparseResume('offline')}
+                            disabled={uploadingResume}
+                            className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg border transition flex items-center gap-1 ${
+                              (resumeData.parse_method || 'ai') === 'offline'
+                                ? 'bg-emerald-950 border-emerald-500 text-emerald-300'
+                                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            <span>⚡</span>
+                            <span>Offline</span>
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   )}
 
                   {/* Actions */}
-                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
-                    {resumeData.has_resume && (
-                      <button
-                        type="button"
-                        onClick={handleEvaluateAll}
-                        disabled={evaluatingAll}
-                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-md shadow-indigo-600/30 flex items-center gap-1.5 transition"
-                      >
-                        {evaluatingAll ? 'Analyzing All Jobs...' : '⚡ Re-Analyze All Jobs with AI'}
-                      </button>
-                    )}
+                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800">
+                    <div>
+                      {resumeData.has_resume && (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleEvaluateAll('ai')}
+                            disabled={evaluatingAll}
+                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow flex items-center gap-1 transition"
+                            title="Analyze all listings using Gemini/OpenAI"
+                          >
+                            <span>🤖</span>
+                            <span>Score Jobs (AI)</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleEvaluateAll('offline')}
+                            disabled={evaluatingAll}
+                            className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow flex items-center gap-1 transition"
+                            title="Instant heuristic evaluation with 0 API calls"
+                          >
+                            <span>⚡</span>
+                            <span>Score Jobs (Offline)</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     <button
                       type="button"
                       onClick={() => setShowResumeModal(false)}

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import Response, FileResponse
@@ -122,7 +122,11 @@ def save_ai_configuration(config: AIConfig):
 
 # Resume Management & PDF Upload
 @app.post("/api/resume/upload")
-async def upload_resume(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
+async def upload_resume(
+    file: UploadFile = File(...),
+    parse_method: str = Form("ai"),
+    background_tasks: BackgroundTasks = None
+):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF resumes are supported.")
 
@@ -140,13 +144,15 @@ async def upload_resume(file: UploadFile = File(...), background_tasks: Backgrou
             resume_text=extracted_text,
             provider=ai_cfg.get("provider", "gemini"),
             api_key=ai_cfg.get("api_key", ""),
-            model=ai_cfg.get("model", "")
+            model=ai_cfg.get("model", ""),
+            parse_method=parse_method
         )
 
         resume_payload = {
             "filename": file.filename,
             "text": extracted_text,
             "profile": profile,
+            "parse_method": parse_method,
             "updated_at": datetime.utcnow().isoformat()
         }
         set_setting("resume_data", resume_payload)
@@ -155,16 +161,52 @@ async def upload_resume(file: UploadFile = File(...), background_tasks: Backgrou
         if background_tasks:
             def run_background_eval():
                 unscored = get_jobs(limit=100)
-                batch_evaluate_unscored_jobs(unscored, resume_payload, ai_cfg)
+                batch_evaluate_unscored_jobs(unscored, resume_payload, ai_cfg, force_method=parse_method, force_rescore=True)
             background_tasks.add_task(run_background_eval)
 
         return {
             "status": "success",
-            "message": f"Resume '{file.filename}' parsed successfully!",
-            "profile": profile
+            "message": f"Resume '{file.filename}' analyzed successfully with {parse_method.upper()} method!",
+            "profile": profile,
+            "parse_method": parse_method
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process PDF resume: {e}")
+
+@app.post("/api/resume/reparse")
+async def reparse_resume(payload: Dict[str, Any], background_tasks: BackgroundTasks = None):
+    method = payload.get("parse_method", "ai")
+    data = get_setting("resume_data")
+    if not data or not data.get("text"):
+        raise HTTPException(status_code=400, detail="No resume uploaded yet to re-analyze.")
+
+    ai_cfg = get_setting("ai_config", {"provider": "gemini", "api_key": ""})
+    profile = parse_resume_profile(
+        resume_text=data["text"],
+        provider=ai_cfg.get("provider", "gemini"),
+        api_key=ai_cfg.get("api_key", ""),
+        model=ai_cfg.get("model", ""),
+        parse_method=method
+    )
+
+    data["profile"] = profile
+    data["parse_method"] = method
+    data["updated_at"] = datetime.utcnow().isoformat()
+    set_setting("resume_data", data)
+
+    # Re-evaluate jobs in background with new analysis
+    if background_tasks:
+        def run_background_eval():
+            all_jobs = get_jobs(limit=250)
+            batch_evaluate_unscored_jobs(all_jobs, data, ai_cfg, force_method=method, force_rescore=True)
+        background_tasks.add_task(run_background_eval)
+
+    return {
+        "status": "success",
+        "message": f"Resume re-analyzed using {method.upper()} method!",
+        "profile": profile,
+        "parse_method": method
+    }
 
 @app.get("/api/resume")
 def get_current_resume():
@@ -175,6 +217,7 @@ def get_current_resume():
         "has_resume": True,
         "filename": data.get("filename"),
         "profile": data.get("profile"),
+        "parse_method": data.get("parse_method", "ai"),
         "updated_at": data.get("updated_at")
     }
 
@@ -185,7 +228,7 @@ def delete_resume():
 
 # AI Job Evaluation Endpoints
 @app.post("/api/jobs/{job_id}/evaluate")
-def evaluate_single_job(job_id: str):
+def evaluate_single_job(job_id: str, method: str = Query("auto")):
     job = get_job_by_id(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -195,13 +238,16 @@ def evaluate_single_job(job_id: str):
         raise HTTPException(status_code=400, detail="Please upload your resume PDF first before running AI evaluation.")
 
     ai_cfg = get_setting("ai_config", {"provider": "gemini", "api_key": ""})
+    eval_m = resume_data.get("parse_method", "ai") if method == "auto" else method
+
     res = evaluate_job_match(
         resume_profile=resume_data.get("profile", {}),
         resume_text=resume_data.get("text", ""),
         job=job,
         provider=ai_cfg.get("provider", "gemini"),
         api_key=ai_cfg.get("api_key", ""),
-        model=ai_cfg.get("model", "")
+        model=ai_cfg.get("model", ""),
+        eval_method=eval_m
     )
 
     update_job_ai_analysis(
@@ -215,19 +261,20 @@ def evaluate_single_job(job_id: str):
     return {"status": "success", "analysis": res}
 
 @app.post("/api/jobs/evaluate-all")
-async def evaluate_all_jobs(background_tasks: BackgroundTasks):
+async def evaluate_all_jobs(background_tasks: BackgroundTasks, method: str = Query("auto")):
     resume_data = get_setting("resume_data")
     if not resume_data or not resume_data.get("profile"):
         raise HTTPException(status_code=400, detail="Please upload your resume PDF first before evaluating.")
 
     ai_cfg = get_setting("ai_config", {"provider": "gemini", "api_key": ""})
+    eval_m = resume_data.get("parse_method", "ai") if method == "auto" else method
 
     def run_eval():
         jobs = get_jobs(limit=250)
-        batch_evaluate_unscored_jobs(jobs, resume_data, ai_cfg)
+        batch_evaluate_unscored_jobs(jobs, resume_data, ai_cfg, force_method=eval_m, force_rescore=True)
 
     background_tasks.add_task(run_eval)
-    return {"status": "success", "message": "AI analysis started in background for all job listings."}
+    return {"status": "success", "message": f"Analysis started in background for all job listings using {eval_m.upper()} method."}
 
 # Scheduler API
 @app.get("/api/scheduler/status")

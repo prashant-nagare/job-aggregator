@@ -32,9 +32,12 @@ Applying for jobs across multiple portals (**LinkedIn**, **Instahyre**, **Indeed
 
 ## 🚀 Key Features
 
-### 1. AI Resume Matcher & Automatic Relevance Filtering (Gemini & OpenAI)
+### 1. AI Resume Matcher & Automatic Relevance Filtering (Gemini, OpenAI & Offline)
 * **PDF Resume Upload**: Directly upload your resume PDF (parsed on the fly via `pypdf`).
-* **Candidate Profile Extraction**: AI automatically extracts your core tech stack, years of experience, domain strengths, and career focus.
+* **Dual Parsing Methods (Selectable with 1 Click)**:
+  * **🤖 AI Analysis**: Uses Gemini (`gemini-1.5-flash`) or OpenAI (`gpt-4o-mini`) for deep semantic extraction of experience, skills taxonomy, and executive summary.
+  * **⚡ Offline Heuristic Method**: 100% private, instant rule-based keyword & pattern matcher. Operates locally with **zero API calls** and zero data sent externally.
+  * Switch between AI and Offline analysis with one click anytime without re-uploading your PDF!
 * **Match Score & Assessment (0 - 100%)**:
   * Evaluates technical skill overlap, seniority alignment, and domain relevance.
   * Identifies **Matched Skills** (green badges) and **Missing Skills** (orange warning tags) for each job.
@@ -42,7 +45,7 @@ Applying for jobs across multiple portals (**LinkedIn**, **Instahyre**, **Indeed
 * **Zero-Intervention Filtering**:
   * Filter jobs instantly by `🎯 Min Match: 60%+, 70%+, 80%+, 90%+`.
   * The 2-hour background auto-scraper automatically evaluates and scores all newly discovered listings against your resume!
-* **Provider Flexibility**: Supports **Google Gemini** (`gemini-1.5-flash`, `gemini-2.0-flash`) and **OpenAI** (`gpt-4o-mini`, `gpt-4o`), plus an offline heuristic matcher if no API key is set.
+* **Provider Flexibility**: Supports **Google Gemini** (`gemini-1.5-flash`, `gemini-2.0-flash`), **OpenAI** (`gpt-4o-mini`, `gpt-4o`), and offline heuristic matching.
 
 ### 2. Multi-Portal Live Scraping Engine
 * **LinkedIn**: Uses LinkedIn's public guest job search endpoint (no credentials needed) + optional dummy account `li_at` cookie to bypass guest rate limits.

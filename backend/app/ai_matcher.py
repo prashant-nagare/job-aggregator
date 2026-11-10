@@ -61,7 +61,8 @@ def heuristic_profile_extraction(resume_text: str) -> Dict[str, Any]:
         "years_of_experience": exp_years,
         "skills": found_skills[:25],
         "domains": ["Technology", "Software Development"],
-        "summary": f"Software professional with ~{exp_years} years experience in {', '.join(found_skills[:5])}."
+        "summary": f"Software professional with ~{exp_years} years experience in {', '.join(found_skills[:5])}.",
+        "parse_method": "offline"
     }
 
 def call_gemini(api_key: str, prompt: str, model: str = "gemini-1.5-flash") -> Optional[str]:
@@ -119,13 +120,18 @@ def parse_resume_profile(
     resume_text: str,
     provider: str = "gemini",
     api_key: str = "",
-    model: str = ""
+    model: str = "",
+    parse_method: str = "ai"
 ) -> Dict[str, Any]:
     """
-    Uses Gemini, OpenAI, or heuristic fallback to parse a resume into structured profile.
+    Uses Gemini, OpenAI, or offline heuristic method to parse a resume into a structured profile.
+    parse_method: "ai" or "offline"
     """
-    if not api_key:
-        return heuristic_profile_extraction(resume_text)
+    # If user selected offline method or no API key is provided, use heuristic extraction
+    if parse_method == "offline" or not api_key:
+        profile = heuristic_profile_extraction(resume_text)
+        profile["parse_method"] = "offline"
+        return profile
 
     prompt = f"""
     Analyze the following resume and extract the candidate profile in strict JSON:
@@ -152,11 +158,15 @@ def parse_resume_profile(
         if raw_json:
             clean = re.sub(r'^```json\s*', '', raw_json.strip())
             clean = re.sub(r'```$', '', clean.strip())
-            return json.loads(clean)
+            parsed = json.loads(clean)
+            parsed["parse_method"] = "ai"
+            return parsed
     except Exception as e:
         print(f"Error parsing resume with LLM: {e}")
 
-    return heuristic_profile_extraction(resume_text)
+    profile = heuristic_profile_extraction(resume_text)
+    profile["parse_method"] = "offline"
+    return profile
 
 def evaluate_job_match(
     resume_profile: Dict[str, Any],
@@ -164,7 +174,8 @@ def evaluate_job_match(
     job: Dict[str, Any],
     provider: str = "gemini",
     api_key: str = "",
-    model: str = ""
+    model: str = "",
+    eval_method: str = "ai"
 ) -> Dict[str, Any]:
     """
     Evaluates how well a job posting matches the candidate's resume.
@@ -179,8 +190,8 @@ def evaluate_job_match(
     job_title = job.get("title") or ""
     job_skills = job.get("skills") or []
     
-    # If API key is present, use LLM
-    if api_key:
+    # If AI evaluation is requested and API key is present, use LLM
+    if eval_method != "offline" and api_key:
         prompt = f"""
         You are an expert technical talent assessor and career matchmaker.
         Evaluate whether this job posting is a suitable match for the candidate based on their profile and resume.
@@ -231,7 +242,7 @@ def evaluate_job_match(
         except Exception as e:
             print(f"Error evaluating match with {provider}: {e}")
 
-    # Fallback Heuristic Match Evaluator (Works offline / without API key!)
+    # Fallback / Offline Heuristic Match Evaluator (Instant, zero API costs)
     candidate_skills = [s.lower() for s in resume_profile.get("skills", [])]
     text_to_search = f"{job_title} {job_desc} {' '.join(job_skills)}".lower()
 
@@ -275,10 +286,12 @@ def evaluate_job_match(
 def batch_evaluate_unscored_jobs(
     jobs: List[Dict[str, Any]],
     resume_data: Dict[str, Any],
-    ai_config: Dict[str, Any]
+    ai_config: Dict[str, Any],
+    force_method: Optional[str] = None,
+    force_rescore: bool = False
 ) -> int:
     """
-    Evaluates unscored jobs against the candidate's resume.
+    Evaluates jobs against the candidate's resume using either AI or offline heuristics.
     """
     if not resume_data or not resume_data.get("profile"):
         return 0
@@ -288,12 +301,21 @@ def batch_evaluate_unscored_jobs(
     provider = ai_config.get("provider", "gemini")
     api_key = ai_config.get("api_key", "")
     model = ai_config.get("model", "")
+    method = force_method or resume_data.get("parse_method", "ai")
 
     count = 0
     for job in jobs:
-        # Only evaluate if not yet scored
-        if job.get("ai_score") is None:
-            res = evaluate_job_match(profile, resume_text, job, provider, api_key, model)
+        # Only evaluate if unscored or force_rescore is enabled
+        if force_rescore or job.get("ai_score") is None:
+            res = evaluate_job_match(
+                resume_profile=profile,
+                resume_text=resume_text,
+                job=job,
+                provider=provider,
+                api_key=api_key,
+                model=model,
+                eval_method=method
+            )
             update_job_ai_analysis(
                 job_id=job["id"],
                 ai_score=res["match_score"],

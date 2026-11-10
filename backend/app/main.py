@@ -173,6 +173,99 @@ async def upload_resume(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process PDF resume: {e}")
 
+@app.post("/api/resume/manual")
+async def save_manual_profile(payload: Dict[str, Any], background_tasks: BackgroundTasks = None):
+    """
+    Saves manually entered professional profile details without storing any private personal info.
+    """
+    target_title = (payload.get("target_title") or "").strip()
+    headline = (payload.get("resume_headline") or "").strip()
+    try:
+        exp_years = float(payload.get("years_of_experience") or 0)
+    except:
+        exp_years = 0.0
+    notice_period = (payload.get("notice_period") or "").strip()
+    preferred_roles = [r.strip() for r in payload.get("preferred_roles", []) if r and r.strip()]
+    skills = [s.strip() for s in payload.get("skills", []) if s and s.strip()]
+    tools = payload.get("tools", [])
+    summary = (payload.get("summary") or "").strip()
+    experiences = payload.get("experiences", [])
+    projects = payload.get("projects", [])
+    certifications = [c.strip() for c in payload.get("certifications", []) if c and c.strip()]
+    preferred_locations = [loc.strip() for loc in payload.get("preferred_locations", []) if loc and loc.strip()]
+
+    # Generate searchable context for matchers
+    text_parts = [
+        f"Title: {target_title}",
+        f"Headline: {headline}",
+        f"Experience: {exp_years} years",
+        f"Notice Period: {notice_period}",
+        f"Preferred Roles: {', '.join(preferred_roles)}",
+        f"Core Skills: {', '.join(skills)}",
+        f"Certifications: {', '.join(certifications)}",
+        f"Preferred Locations: {', '.join(preferred_locations)}",
+        f"Professional Summary: {summary}"
+    ]
+    if tools:
+        tool_strs = [f"{t.get('name')} ({t.get('experience_years', '')} yrs)" for t in tools if isinstance(t, dict) and t.get("name")]
+        if tool_strs:
+            text_parts.append(f"Tools & Tech: {', '.join(tool_strs)}")
+    if experiences:
+        text_parts.append("Work Experience:")
+        for exp in experiences:
+            if isinstance(exp, dict) and (exp.get("role") or exp.get("company")):
+                text_parts.append(f"- {exp.get('role')} at {exp.get('company')} ({exp.get('duration')}): {exp.get('description')}")
+    if projects:
+        text_parts.append("Key Projects:")
+        for proj in projects:
+            if isinstance(proj, dict) and proj.get("title"):
+                text_parts.append(f"- {proj.get('title')}: {proj.get('description')}")
+
+    full_text = "\n".join(text_parts)
+
+    profile_data = {
+        "candidate_name": "Candidate Profile",
+        "target_title": target_title,
+        "resume_headline": headline,
+        "years_of_experience": exp_years,
+        "notice_period": notice_period,
+        "preferred_roles": preferred_roles,
+        "skills": skills,
+        "tools": tools,
+        "summary": summary,
+        "experiences": experiences,
+        "projects": projects,
+        "certifications": certifications,
+        "preferred_locations": preferred_locations,
+        "domains": ["Cybersecurity", "IT Security", "Vulnerability Management"] if any("cyber" in s.lower() or "vulnerab" in s.lower() for s in skills) else ["Technology"],
+        "parse_method": "manual"
+    }
+
+    resume_payload = {
+        "filename": "Manual Professional Profile",
+        "text": full_text,
+        "profile": profile_data,
+        "parse_method": "manual",
+        "updated_at": datetime.utcnow().isoformat()
+    }
+    set_setting("resume_data", resume_payload)
+
+    # Automatically score all jobs in background
+    ai_cfg = get_setting("ai_config", {"provider": "gemini", "api_key": ""})
+    eval_method = payload.get("eval_method", "offline" if not ai_cfg.get("api_key") else "ai")
+    if background_tasks:
+        def run_background_eval():
+            all_jobs = get_jobs(limit=250)
+            batch_evaluate_unscored_jobs(all_jobs, resume_payload, ai_cfg, force_method=eval_method, force_rescore=True)
+        background_tasks.add_task(run_background_eval)
+
+    return {
+        "status": "success",
+        "message": "Manual profile saved successfully and job scoring started!",
+        "profile": profile_data,
+        "parse_method": "manual"
+    }
+
 @app.post("/api/resume/reparse")
 async def reparse_resume(payload: Dict[str, Any], background_tasks: BackgroundTasks = None):
     method = payload.get("parse_method", "ai")

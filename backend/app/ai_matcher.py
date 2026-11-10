@@ -190,6 +190,20 @@ def evaluate_job_match(
     job_title = job.get("title") or ""
     job_skills = job.get("skills") or []
     
+    # Collect all skills, tools, and certifications for comprehensive matching
+    all_skills = list(resume_profile.get("skills") or [])
+    for t in (resume_profile.get("tools") or []):
+        tname = t.get("name") if isinstance(t, dict) else str(t)
+        if tname and tname not in all_skills:
+            all_skills.append(tname)
+    for c in (resume_profile.get("certifications") or []):
+        if c and c not in all_skills:
+            all_skills.append(c)
+
+    pref_roles = resume_profile.get("preferred_roles") or []
+    target_role = resume_profile.get("target_title") or ""
+    headline = resume_profile.get("resume_headline") or ""
+    
     # If AI evaluation is requested and API key is present, use LLM
     if eval_method != "offline" and api_key:
         prompt = f"""
@@ -197,9 +211,12 @@ def evaluate_job_match(
         Evaluate whether this job posting is a suitable match for the candidate based on their profile and resume.
 
         CANDIDATE PROFILE:
-        - Target Role: {resume_profile.get('target_title', '')}
+        - Target Role: {target_role}
+        - Preferred Roles: {', '.join(pref_roles)}
+        - Headline: {headline}
         - Years of Experience: {resume_profile.get('years_of_experience', 0)}
-        - Core Skills: {', '.join(resume_profile.get('skills', []))}
+        - Core Skills & Tools: {', '.join(all_skills)}
+        - Certifications: {', '.join(resume_profile.get('certifications', []))}
         - Summary: {resume_profile.get('summary', '')}
 
         JOB POSTING:
@@ -243,35 +260,43 @@ def evaluate_job_match(
             print(f"Error evaluating match with {provider}: {e}")
 
     # Fallback / Offline Heuristic Match Evaluator (Instant, zero API costs)
-    candidate_skills = [s.lower() for s in resume_profile.get("skills", [])]
+    candidate_skills_lower = [s.lower() for s in all_skills]
     text_to_search = f"{job_title} {job_desc} {' '.join(job_skills)}".lower()
 
     matched = []
-    for s in resume_profile.get("skills", []):
-        if re.search(rf'\b{re.escape(s.lower())}\b', text_to_search):
+    for s in all_skills:
+        pattern = rf'(?:\b|(?<=[\s,./\-_])){re.escape(s.lower())}(?:\b|(?=[\s,./\-_]))'
+        if re.search(pattern, text_to_search):
             matched.append(s)
 
     # Check job skills that candidate might be missing
     missing = []
     for js in job_skills:
-        if not any(cs in js.lower() or js.lower() in cs for cs in candidate_skills):
-            if len(js) > 2:
+        if not any(cs in js.lower() or js.lower() in cs for cs in candidate_skills_lower):
+            if len(js) > 2 and js not in missing:
                 missing.append(js)
 
     # Calculate score
-    base_score = 40
+    base_score = 35
     if matched:
-        base_score += min(45, len(matched) * 12)
-    # Check title alignment
+        base_score += min(50, len(matched) * 12)
+
+    # Check role alignment against target_role, pref_roles, and headline
+    cand_titles_text = f"{target_role} {' '.join(pref_roles)} {headline}".lower()
     title_words = [w.lower() for w in job_title.split() if len(w) > 3]
-    cand_title = (resume_profile.get("target_title") or "").lower()
-    if any(w in cand_title for w in title_words):
+    if any(w in cand_titles_text for w in title_words):
         base_score += 15
+
+    # Check location alignment
+    pref_locs = [l.lower() for l in (resume_profile.get("preferred_locations") or [])]
+    job_loc = (job.get("location") or "").lower()
+    if job.get("is_remote") or any(pl in job_loc for pl in pref_locs):
+        base_score += 5
 
     final_score = min(98, max(20, base_score))
     is_rel = final_score >= 65
 
-    verdict = f"Matches {len(matched)} key skills ({', '.join(matched[:3])})." if matched else "Limited direct skill overlap detected."
+    verdict = f"Matches {len(matched)} key skills ({', '.join(matched[:4])})." if matched else "Limited direct skill overlap detected."
     if missing:
         verdict += f" Missing: {', '.join(missing[:3])}."
 

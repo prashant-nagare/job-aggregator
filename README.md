@@ -32,8 +32,13 @@ Applying for jobs across multiple portals (**LinkedIn**, **Instahyre**, **Indeed
 
 ## 🚀 Key Features
 
-### 1. AI Resume Matcher & Automatic Relevance Filtering (Gemini, OpenAI & Offline)
-* **PDF Resume Upload**: Directly upload your resume PDF (parsed on the fly via `pypdf`).
+### 1. Resume Matching & Candidate Profile (Manual Editor, AI & Offline)
+* **✏️ Manual Profile & Skill Editor**:
+  * Directly define your primary title, headline, experience years, notice period, and preferred roles.
+  * Tag-based exact skill chips, tools breakdown with years of experience, and certifications (e.g. CEH).
+  * 100% private: Zero personal contact details (no phone, no email, no address, no DOB) are ever requested or stored.
+  * Includes a **`[🗑️ Clear Form]`** button to wipe inputs anytime.
+* **📄 PDF Resume Upload**: Directly upload your resume PDF (parsed on the fly via `pypdf`).
 * **Dual Parsing Methods (Selectable with 1 Click)**:
   * **🤖 AI Analysis**: Uses Gemini (`gemini-1.5-flash`) or OpenAI (`gpt-4o-mini`) for deep semantic extraction of experience, skills taxonomy, and executive summary.
   * **⚡ Offline Heuristic Method**: 100% private, instant rule-based keyword & pattern matcher. Operates locally with **zero API calls** and zero data sent externally.
@@ -44,7 +49,7 @@ Applying for jobs across multiple portals (**LinkedIn**, **Instahyre**, **Indeed
   * Generates an honest 1-2 sentence AI verdict on your fit for the role.
 * **Zero-Intervention Filtering**:
   * Filter jobs instantly by `🎯 Min Match: 60%+, 70%+, 80%+, 90%+`.
-  * The 2-hour background auto-scraper automatically evaluates and scores all newly discovered listings against your resume!
+  * The 2-hour background auto-scraper automatically evaluates and scores all newly discovered listings against your profile!
 * **Provider Flexibility**: Supports **Google Gemini** (`gemini-1.5-flash`, `gemini-2.0-flash`), **OpenAI** (`gpt-4o-mini`, `gpt-4o`), and offline heuristic matching.
 
 ### 2. Multi-Portal Live Scraping Engine
